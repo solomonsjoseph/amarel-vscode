@@ -1,0 +1,22 @@
+# Build artifacts
+*.tgz
+*.tar.gz
+toolchain/
+tmp/
+build/
+
+# Local clones for testing
+vscode-sysroot/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Secrets (defense in depth — there should never be any here, but be paranoid)
+*.key
+*.pem
+id_rsa
+id_ed25519

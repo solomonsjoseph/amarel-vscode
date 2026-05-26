@@ -1,0 +1,18 @@
+# SHA-256 checksums for artifacts the setup scripts download.
+# Format: <sha256>  <filename>
+#
+# The maintainer regenerates this file after building/uploading a new tarball.
+# Setup scripts verify downloads against these values before installing anything.
+#
+# Generate with:
+#   shasum -a 256 vscode-sysroot-x86_64-linux-gnu.tgz
+#   shasum -a 256 patchelf-0.18.0-x86_64.tar.gz
+
+# vscode-sysroot tarball (built from ursetto/vscode-sysroot, patchelf upgraded to 0.18.0)
+# Placeholder — replace after first ./scripts/build-sysroot.sh and ./gh release upload
+0000000000000000000000000000000000000000000000000000000000000000  vscode-sysroot-x86_64-linux-gnu.tgz
+
+# patchelf 0.18.0 x86_64 (from NixOS/patchelf releases)
+# Placeholder — compute and replace via: shasum -a 256 patchelf-0.18.0-x86_64.tar.gz
+# Source of truth: https://github.com/NixOS/patchelf/releases/tag/0.18.0
+0000000000000000000000000000000000000000000000000000000000000000  patchelf-0.18.0-x86_64.tar.gz
