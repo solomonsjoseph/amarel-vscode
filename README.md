@@ -1,8 +1,8 @@
 # amarel-vscode
 
-One-shot Claude Code skill that sets up **VS Code Remote-SSH** against the
+LLM-agnostic skill that sets up **VS Code Remote-SSH** against the
 **Rutgers Amarel HPC cluster** (CentOS 7, glibc 2.17) using a custom-glibc
-sysroot. Designed for teammates who otherwise hit:
+sysroot. Fixes the dreaded:
 
 ```
 expected GLIBC >= v2.28.0 (but found v2.17.0 instead)
@@ -11,9 +11,25 @@ expected GLIBC >= v2.28.0 (but found v2.17.0 instead)
 After running this once, you connect to Amarel from VS Code in 2 clicks
 and **never type your Amarel password again**.
 
+**Works with:** Claude Code, OpenAI Codex CLI, Gemini CLI, Cursor, Cline,
+bare LLMs (ChatGPT / Claude.ai / Ollama), and **no LLM at all** — the
+setup scripts are plain bash / PowerShell.
+
 ---
 
-## Quick start
+## Quick start (pick one)
+
+### A. No LLM — just run the script
+
+```bash
+git clone https://github.com/solomonsjoseph/amarel-vscode.git
+cd amarel-vscode
+./scripts/setup.sh                # macOS / Linux
+# OR on Windows:
+pwsh scripts/setup.ps1
+```
+
+### B. Claude Code (slash command)
 
 ```bash
 git clone https://github.com/solomonsjoseph/amarel-vscode.git
@@ -23,24 +39,42 @@ cd amarel-vscode
 /amarel-vscode-setup
 ```
 
-Total time: ~5 min. You'll type your Amarel password exactly **once** and
-your SSH key passphrase exactly **once**. After that the OS keychain
-handles auth.
+### C. Codex CLI / Gemini CLI / Cursor / Cline
+
+```bash
+git clone https://github.com/solomonsjoseph/amarel-vscode.git
+cd amarel-vscode
+codex      # or: gemini  /  open the folder in Cursor or VS Code with Cline
+```
+Then ask the agent: *"Set up VS Code Remote-SSH for me on Amarel."*
+
+Each tool picks up its own instruction file (`AGENTS.md`, `GEMINI.md`,
+`.cursor/rules/`, `.clinerules`) — all defer to `AGENTS.md` for the
+canonical runbook.
+
+### D. ChatGPT, Claude.ai, Ollama, LM Studio, etc.
+
+See [`docs/using-other-llms.md`](docs/using-other-llms.md) for a copy-paste
+prompt template. The TL;DR: paste `AGENTS.md`'s contents into your chat as
+context and ask the model to walk you through it.
+
+Total time on any path: ~5 min. You'll type your Amarel password exactly
+**once** and your SSH key passphrase exactly **once**. After that the OS
+keychain handles auth.
 
 ---
 
 ## Prerequisites
 
-Before running the skill:
+Regardless of which path you pick:
 
 1. **Valid Rutgers Amarel account.** If you don't have one, request access via OARC.
 2. **Connected to the Rutgers VPN.** The VPN gateway is where 2FA / Duo happens — once you're inside the VPN, Amarel doesn't re-challenge for 2FA on SSH connections.
 3. **VS Code installed** with the **Remote-SSH** extension (`ms-vscode-remote.remote-ssh`).
 4. **OpenSSH client tools.** Ship by default on macOS and Windows 10/11 (1809+) — no install needed for 99% of users.
-5. **Claude Code** — to run the `/amarel-vscode-setup` skill.
 
-The skill itself checks all five of these and aborts with a friendly message
-if anything's missing.
+The setup script checks all four and aborts with a friendly message if
+anything's missing.
 
 ---
 
