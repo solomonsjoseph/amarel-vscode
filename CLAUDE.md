@@ -8,15 +8,15 @@ This is **not** an application — it's an LLM-agnostic *skill/runbook* that set
 
 ## Canonical runbook lives elsewhere — read it first
 
-When the user asks you to "set up Amarel," "fix the GLIBC error," or invokes `/amarel-vscode-setup`, **follow `SKILL.md`** (the Claude Code entry point). `AGENTS.md` is the framework-neutral mirror of the same runbook for other agents (Codex, Gemini, Cursor, Cline). Both contain the full phase-by-phase script flow, security deny-list, and failure handling. Do not re-derive that content here.
+When the user asks you to "set up Amarel," "fix the GLIBC error," or invokes `/amarel-vscode-setup`, **follow `SKILL.md`** (the Claude Code entry point). `AGENTS.md` is the framework-neutral mirror of the same runbook for other agents (Codex, Cursor, Cline, Gemini). Both contain the full step-by-step manual flow (Phases 0–10), security deny-list, and failure handling. Do not re-derive that content here.
+
+`SKILL.md` / `AGENTS.md` walk the user through **one terminal command at a time** — you hand them the command, they run it, they paste output, you advance. **Do NOT run `scripts/setup.sh` or `scripts/setup.ps1` yourself.** The script is the one-shot fallback for users who explicitly ask for it (documented as "Power-user path" in the runbooks).
 
 If you edit one runbook file, keep the others in sync. The mirrors are:
 
 - `SKILL.md` — Claude Code (has YAML frontmatter for slash-command discovery)
-- `AGENTS.md` — canonical / Codex / general AGENTS.md convention
-- `GEMINI.md` — Gemini CLI
-- `.clinerules` — Cline
-- `.cursor/rules/amarel-vscode.mdc` — Cursor (MDC format)
+- `AGENTS.md` — canonical / Codex / Cursor / Cline (per the [agents.md convention](https://agents.md))
+- `GEMINI.md` — Gemini CLI (thin pointer to AGENTS.md)
 - `docs/using-other-llms.md` — bare-LLM copy-paste prompt
 
 ## Commands
@@ -27,7 +27,7 @@ If you edit one runbook file, keep the others in sync. The mirrors are:
 pwsh scripts/setup.ps1                # Windows
 AMAREL_USER=netid ./scripts/setup.sh  # non-interactive username
 
-# Install/refresh the Claude Code slash command (symlinks repo into ~/.claude/skills/)
+# Install/refresh local agent skill links (Claude Code + Codex)
 ./install.sh                          # macOS / Linux
 .\install.ps1                         # Windows
 
@@ -35,17 +35,17 @@ AMAREL_USER=netid ./scripts/setup.sh  # non-interactive username
 ./scripts/build-sysroot.sh
 ```
 
-There is no build/lint/test suite. The "tests" are the 9 idempotent phases inside `setup.sh` / `setup.ps1`; they self-verify (preflight tools, VPN reachability, key auth via `BatchMode=yes`, env-var survival in non-interactive SSH). Re-running the script after a fix is the canonical way to verify a change.
+There is no build/lint/test suite. The "tests" are the 11 idempotent phases (0–10) inside `setup.sh` / `setup.ps1`; they self-verify (preflight tools, VPN reachability, key auth via `BatchMode=yes`, env-var survival in non-interactive SSH, settings.json round-trip). Re-running the script after a fix is the canonical way to verify a change.
 
 ## Architecture
 
 The runtime artifact is a tarball (`vscode-sysroot-x86_64-linux-gnu.tgz`) published to GitHub Releases. Locally, the moving parts are:
 
-- `scripts/setup.{sh,ps1}` — the user-facing installer. 9 phases: preflight → ssh-keygen → fingerprint verify → ssh-copy-id → ssh-add → BatchMode verify → tarball download+checksum → scp+extract+`.bashrc` edit → non-interactive env-var verify → VS Code GUI hand-off.
+- `scripts/setup.{sh,ps1}` — the no-LLM / power-user installer (still maintained). 11 phases (0–10): preflight → ssh-keygen → fingerprint verify → ssh-copy-id → ssh-add → BatchMode verify → tarball download+checksum → scp+extract+`.bashrc` edit → non-interactive env-var verify → settings.json signature-disable merge → VS Code GUI hand-off.
 - `assets/sysroot.sh` — the snippet appended to `~/.bashrc` on Amarel. Exports three env vars (`VSCODE_SERVER_CUSTOM_GLIBC_LINKER`, `..._PATH`, `VSCODE_SERVER_PATCHELF_PATH`) that VS Code Server's bootstrap reads to patchelf its node binary against the bundled glibc 2.28. This is Microsoft's documented workaround.
 - `assets/checksums.txt` — SHA-256 pins for the sysroot tarball + patchelf binary. Phase 6 of `setup.sh` refuses to proceed unless the download matches.
 - `scripts/build-sysroot.sh` — maintainer pipeline: clones `ursetto/vscode-sysroot` at a pinned commit, builds via Docker (`linux/amd64`), splices in patchelf ≥ 0.18, re-tars, prints SHAs to paste into `checksums.txt`. The `URSETTO_COMMIT` variable should be a pinned SHA before tagging a release.
-- `install.{sh,ps1}` — only relevant when this repo is being installed as a Claude Code skill: symlinks the repo into `~/.claude/skills/amarel-vscode-setup` so `git pull` updates the installed skill.
+- `install.{sh,ps1}` — installs local agent skill links for Claude Code and Codex (`~/.claude/skills/amarel-vscode-setup` and `~/.codex/skills/amarel-vscode-setup`) so `git pull` updates the installed skill.
 
 The release flow (see README "Maintainer notes"): `build-sysroot.sh` → update `checksums.txt` → `gh release create vX.Y.Z …`. `setup.sh` downloads from `releases/latest/download/…`, so a new release becomes default automatically.
 
@@ -57,6 +57,7 @@ A fingerprint mismatch in Phase 2 is a hard stop — possible MITM. Do not work 
 
 ## Conventions worth knowing
 
-- The 9-phase numbering in `setup.sh` is load-bearing — error messages, the README troubleshooting table, and all agent runbooks reference phases by number. Don't renumber.
+- The 11-phase numbering (0–10) in `setup.sh` and the runbooks is load-bearing — error messages, the README troubleshooting table, `SKILL.md`, `AGENTS.md`, `GEMINI.md`, and `docs/using-other-llms.md` all reference phases by number. Don't renumber; insert new phases with `.5` if absolutely needed.
+- Phase 0 owns local OS detection. Do not ask the user whether they are on macOS, Linux, or Windows; infer it from context or the Phase 0 output and branch from there.
 - Scripts must remain idempotent. Re-running after any failure is the supported recovery path; don't introduce state that breaks on re-run.
 - "🔒 YOUR TURN" is the convention for any prompt the user must type into (vs. confirmations or info lines). Preserve the marker if you add new interactive steps.

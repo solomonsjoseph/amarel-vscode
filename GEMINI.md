@@ -13,11 +13,17 @@ This repo deploys VS Code Remote-SSH against the Rutgers Amarel HPC cluster
 (CentOS 7) using a custom-glibc sysroot. When the user asks you to "set up
 Amarel" or "fix the Remote-SSH GLIBC error":
 
-1. Read `AGENTS.md` for the full runbook + security constraints.
-2. On macOS/Linux run `bash scripts/setup.sh`. On Windows run
-   `pwsh scripts/setup.ps1`.
-3. Stream the script's output back to the user.
-4. The script is idempotent and handles all interactive prompts itself.
+1. Read `AGENTS.md` for the full step-by-step runbook + security constraints.
+2. Walk the user through **Phases 0–10 one command at a time.** For each
+   phase, give them the exact command in a fenced block, tell them the
+   success marker, wait for them to paste the result, then advance.
+3. **Do not ask the user which OS they are on.** Infer it from context when
+   possible; otherwise Phase 0 detects it and you branch from that output.
+4. **Do not run the scripts (`scripts/setup.sh` / `scripts/setup.ps1`)
+   yourself.** The one-shot script is only for users who explicitly ask
+   ("just run it for me") — see the *Power-user path* in `AGENTS.md`.
+5. The user types all secrets (Amarel password in Phase 3, key passphrase in
+   Phases 1 & 4) into the OS terminal. You never see those.
 
 **Security: you must not** read `~/.ssh/id_*` private keys, invoke `sshpass`/
 `expect`, query OS keychains, or weaken `BatchMode=yes` constraints. See

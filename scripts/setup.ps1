@@ -72,6 +72,8 @@ function Die {
 function Invoke-PhasePreflight {
   Write-Heading "Phase 0 — Checking prerequisites"
 
+  Write-Info "Local OS detected: Windows"
+
   # OpenSSH client
   $missing = @()
   foreach ($cmd in 'ssh','scp','ssh-keygen','ssh-add','ssh-keyscan') {
@@ -197,8 +199,8 @@ function Invoke-PhaseKnownHost {
 function Invoke-PhaseCopyId {
   Write-Heading "Phase 3 — Install public key on Amarel"
 
-  $args = @('-o','BatchMode=yes','-o','ConnectTimeout=5','-i',$SshKeyPath,"$AmarelUser@$AmarelHost",'true')
-  & ssh @args 2>$null
+  $sshArgs = @('-o','BatchMode=yes','-o','ConnectTimeout=5','-i',$SshKeyPath,"$AmarelUser@$AmarelHost",'true')
+  & ssh @sshArgs 2>$null
   if ($LASTEXITCODE -eq 0) {
     Write-Info "Key-based login already works — skipping ssh-copy-id"
     return
@@ -300,6 +302,21 @@ function Invoke-PhaseDownloadTarball {
   }
 
   Test-Sha256 -File $TarballLocal -LookupName 'vscode-sysroot-x86_64-linux-gnu.tgz'
+  Test-TarballIntact -File $TarballLocal
+}
+
+function Test-TarballIntact {
+  # Catches truncated downloads that slipped past the hash check (placeholder
+  # checksums, interrupted download). 'tar -tzf' decompresses + lists without
+  # extracting. Windows 10+ ships BSD tar with gzip support.
+  param([string]$File)
+  & tar -tzf $File > $null 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    Write-Err "Tarball is corrupt or truncated: $File"
+    Write-Err "Delete it and re-run, or rebuild with ./scripts/build-sysroot.sh"
+    Die "Refusing to extract a corrupt tarball."
+  }
+  Write-Info "Tarball is well-formed (tar -tzf passed)"
 }
 
 function Test-Sha256 {
@@ -349,6 +366,13 @@ rm -f "$HOME/vscode-sysroot-x86_64-linux-gnu.tgz"
 test -f "$HOME/.vscode-server/sysroot/lib/ld-linux-x86-64.so.2" || { echo "ERR: linker missing"; exit 1; }
 test -x "$HOME/.vscode-server/sysroot/usr/bin/patchelf"        || { echo "ERR: patchelf missing or not exec"; exit 1; }
 test -f "$HOME/.vscode-server/sysroot.sh"                      || { echo "ERR: sysroot.sh missing"; exit 1; }
+if command -v file >/dev/null 2>&1; then
+  PE_INFO="$(file "$HOME/.vscode-server/sysroot/usr/bin/patchelf")"
+  case "$PE_INFO" in
+    *x86-64*|*x86_64*) : ;;
+    *) echo "ERR: patchelf is not x86_64 - got: $PE_INFO" >&2; exit 1 ;;
+  esac
+fi
 if ! grep -q '\.vscode-server/sysroot\.sh' "$HOME/.bashrc" 2>/dev/null; then
   printf '\n# VS Code Server custom glibc workaround (added by amarel-vscode skill)\n[ -f "$HOME/.vscode-server/sysroot.sh" ] && source "$HOME/.vscode-server/sysroot.sh"\n' >> "$HOME/.bashrc"
 fi
@@ -375,9 +399,69 @@ function Invoke-PhaseVerifyEnv {
   }
 }
 
-# ─── Phase 9 — Final instructions ──────────────────────────────────────────
+# ─── Phase 9 — Disable VS Code Server extension signature verification ─────
+# Why: VS Code Server's signature crypto crashes ("signature verification
+# failed with UnknownError") when the node binary is patchelf'd against a
+# custom glibc on CentOS 7. Disabling the second-layer VSIX check is the
+# documented workaround. HTTPS to the marketplace still authenticates the
+# download.
+# The merge is idempotent and preserves any existing settings the user has.
+function Invoke-PhaseDisableSignatureCheck {
+  Write-Heading "Phase 9 — Disable extension signature verification on Amarel"
+
+  $remoteScript = @'
+set -euo pipefail
+SETTINGS_DIR="$HOME/.vscode-server/data/Machine"
+SETTINGS_FILE="$SETTINGS_DIR/settings.json"
+mkdir -p "$SETTINGS_DIR"
+
+if command -v python3 >/dev/null 2>&1; then
+  python3 - "$SETTINGS_FILE" <<'PY'
+import json, os, sys
+path = sys.argv[1]
+data = {}
+if os.path.exists(path) and os.path.getsize(path) > 0:
+    with open(path) as f:
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError as exc:
+            sys.exit(f"ERR: {path} is not valid JSON ({exc}); refusing to overwrite")
+    if not isinstance(data, dict):
+        sys.exit(f"ERR: {path} root is not a JSON object; refusing to overwrite")
+data["extensions.verifySignature"] = False
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(data, f, indent=4)
+    f.write("\n")
+os.replace(tmp, path)
+PY
+elif command -v jq >/dev/null 2>&1; then
+  TMP="$(mktemp)"
+  if [ -s "$SETTINGS_FILE" ]; then
+    jq '. + {"extensions.verifySignature": false}' "$SETTINGS_FILE" > "$TMP" \
+      || { echo "ERR: $SETTINGS_FILE is not valid JSON; refusing to overwrite" >&2; rm -f "$TMP"; exit 1; }
+  else
+    printf '{\n    "extensions.verifySignature": false\n}\n' > "$TMP"
+  fi
+  mv "$TMP" "$SETTINGS_FILE"
+else
+  echo "ERR: neither python3 nor jq available on Amarel; cannot safely merge settings.json" >&2
+  exit 1
+fi
+
+python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d.get('extensions.verifySignature') is False, d; print('verified:', json.dumps(d))" "$SETTINGS_FILE" 2>/dev/null \
+  || jq -e '.["extensions.verifySignature"] == false' "$SETTINGS_FILE" >/dev/null \
+  || { echo "ERR: post-write check failed" >&2; exit 1; }
+'@
+
+  $remoteScript | & ssh -o BatchMode=yes "$AmarelUser@$AmarelHost" 'bash -se'
+  if ($LASTEXITCODE -ne 0) { Die "Failed to disable signature verification on Amarel." }
+  Write-Info "Extension signature verification disabled (Install in SSH will now work for marketplace extensions)"
+}
+
+# ─── Phase 10 — Final instructions ─────────────────────────────────────────
 function Invoke-PhaseFinish {
-  Write-Heading "Phase 9 — Open VS Code"
+  Write-Heading "Phase 10 — Open VS Code"
   Write-Host ""
   Write-Host "  ✓ Server-side setup complete." -ForegroundColor Green
   Write-Host ""
@@ -422,4 +506,5 @@ Invoke-PhaseVerifyPasswordless
 Invoke-PhaseDownloadTarball
 Invoke-PhaseDeploy
 Invoke-PhaseVerifyEnv
+Invoke-PhaseDisableSignatureCheck
 Invoke-PhaseFinish

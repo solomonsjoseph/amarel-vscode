@@ -4,6 +4,7 @@
 toolchain/
 tmp/
 build/
+*.log
 
 # Local clones for testing
 vscode-sysroot/

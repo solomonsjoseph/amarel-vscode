@@ -16,7 +16,10 @@ set -euo pipefail
 # To bump: visit https://github.com/ursetto/vscode-sysroot/commits/main and
 # replace the SHA below with the commit you want to lock to.
 URSETTO_REPO="https://github.com/ursetto/vscode-sysroot.git"
-URSETTO_COMMIT="${URSETTO_COMMIT:-main}"   # TODO: replace 'main' with a pinned commit SHA
+# Pinned to the only commit on upstream main as of 2026-05-26 ("Initial import",
+# dated 2025-05-01). Bump this SHA explicitly when upstream ships changes you
+# have audited.
+URSETTO_COMMIT="${URSETTO_COMMIT:-ee825cce3ccd6d55eb3e1685c5510a2b8e74b32f}"
 
 PATCHELF_VERSION="0.18.0"
 PATCHELF_URL="https://github.com/NixOS/patchelf/releases/download/${PATCHELF_VERSION}/patchelf-${PATCHELF_VERSION}-x86_64.tar.gz"

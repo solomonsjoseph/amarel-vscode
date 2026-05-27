@@ -29,28 +29,44 @@ cd amarel-vscode
 pwsh scripts/setup.ps1
 ```
 
-### B. Claude Code (slash command)
+### B. Install as a local agent skill (Claude Code + Codex)
 
 ```bash
 git clone https://github.com/solomonsjoseph/amarel-vscode.git
 cd amarel-vscode
 ./install.sh                       # or: .\install.ps1   on Windows
-# Restart Claude Code, then:
+# Restart Claude Code or Codex so it reloads local skills.
+```
+
+Claude Code exposes the slash command:
+
+```text
 /amarel-vscode-setup
 ```
 
-### C. Codex CLI / Gemini CLI / Cursor / Cline
+Codex loads the same installed skill by name/description. Ask:
+
+```text
+Set up VS Code Remote-SSH for me on Amarel.
+```
+
+The agent walks you through Phases 0–10 **one command at a time** — copy
+each command into your terminal, paste the result back, advance. You can ask
+the agent to "just run the script" if you'd rather use path A.
+
+### C. Repo-local instructions for Gemini / Cursor / Cline
 
 ```bash
 git clone https://github.com/solomonsjoseph/amarel-vscode.git
 cd amarel-vscode
-codex      # or: gemini  /  open the folder in Cursor or VS Code with Cline
+gemini      # or open the folder in Cursor or VS Code with Cline
 ```
 Then ask the agent: *"Set up VS Code Remote-SSH for me on Amarel."*
 
-Each tool picks up its own instruction file (`AGENTS.md`, `GEMINI.md`,
-`.cursor/rules/`, `.clinerules`) — all defer to `AGENTS.md` for the
-canonical runbook.
+Each tool picks up its own instruction file (`AGENTS.md`, `GEMINI.md`) or
+the repo-level `AGENTS.md` convention. All defer to `AGENTS.md` for the
+canonical step-by-step runbook. The agent hands you one command at a time
+and waits for your output between phases.
 
 ### D. ChatGPT, Claude.ai, Ollama, LM Studio, etc.
 
@@ -73,8 +89,9 @@ Regardless of which path you pick:
 3. **VS Code installed** with the **Remote-SSH** extension (`ms-vscode-remote.remote-ssh`).
 4. **OpenSSH client tools.** Ship by default on macOS and Windows 10/11 (1809+) — no install needed for 99% of users.
 
-The setup script checks all four and aborts with a friendly message if
-anything's missing.
+The skill/script detects the local OS during Phase 0, then checks the rest
+and aborts with a friendly message if anything's missing. You do not need to
+tell the agent whether you are on macOS, Linux, or Windows.
 
 ---
 
@@ -82,7 +99,7 @@ anything's missing.
 
 | Phase | Action |
 |-------|--------|
-| 0 | Preflight (tools, VPN reachability, VS Code) |
+| 0 | Preflight (detect local OS, tools, VPN reachability, VS Code) |
 | 1 | Generate SSH keypair (`~/.ssh/id_ed25519_amarel`) — you pick the passphrase |
 | 2 | Show Amarel's host fingerprint, ask you to verify against Rutgers OARC's published value |
 | 3 | `ssh-copy-id` — installs your public key on Amarel (one Amarel password prompt) |
@@ -91,9 +108,10 @@ anything's missing.
 | 6 | Download sysroot tarball from GitHub Release, verify SHA-256 |
 | 7 | `scp` tarball to Amarel, extract under `~/.vscode-server/sysroot/`, edit `~/.bashrc` |
 | 8 | Verify env vars survive a non-interactive SSH session |
-| 9 | Print VS Code GUI steps |
+| 9 | Merge `"extensions.verifySignature": false` into `~/.vscode-server/data/Machine/settings.json` on Amarel — workaround for the patched-glibc node breaking VSIX signature crypto on CentOS 7. Idempotent JSON merge. |
+| 10 | Print VS Code GUI steps |
 
-After phase 9, open VS Code → **Remote-SSH: Connect to Host** → `amarel.rutgers.edu`. Done.
+After phase 10, open VS Code → **Remote-SSH: Connect to Host** → `amarel.rutgers.edu`. Done.
 
 ---
 
@@ -102,7 +120,7 @@ After phase 9, open VS Code → **Remote-SSH: Connect to Host** → `amarel.rutg
 Passwords are typed by you, into the OS terminal, never visible to the LLM
 or to any helper process. Specifically:
 
-| Material | Lives where | Claude can read? |
+| Material | Lives where | Agent can read? |
 |---|---|---|
 | Amarel password | Typed once into `ssh-copy-id` TTY → sent to Amarel sshd | **No.** TTY-attached prompt. |
 | Private SSH key | `~/.ssh/id_ed25519_amarel`, encrypted with passphrase | Forbidden by `SKILL.md`. |
@@ -110,9 +128,9 @@ or to any helper process. Specifically:
 | Public SSH key | `~/.ssh/id_ed25519_amarel.pub`, plaintext | Yes — but it's public by design. |
 
 The setup scripts are forbidden from invoking `sshpass`, `expect`, the
-`security` CLI, or any other helper that could pipe a password through Claude's
-process tree. `SKILL.md` codifies these constraints so a reviewer can verify
-them by reading one file.
+`security` CLI, or any other helper that could pipe a password through an
+agent's process tree. `SKILL.md` codifies these constraints so a reviewer
+can verify them by reading one file.
 
 See [`docs/security-review.md`](docs/security-review.md) for the full audit.
 
@@ -153,6 +171,7 @@ This is Microsoft's [officially documented workaround](https://code.visualstudio
 | `expected GLIBC >= v2.28.0` still appears in Remote-SSH log | Phase 8 of the skill verifies this; if it passed and VS Code still errors, you likely have a stale `~/.vscode-server` from a previous attempt. Remove it: `ssh amarel.rutgers.edu 'chmod -R u+w ~/.vscode-server/cli && rm -rf ~/.vscode-server/cli'` and try again. |
 | Tarball download fails | The maintainer hasn't published a release yet, or your network blocks GitHub. Rebuild locally: `./scripts/build-sysroot.sh` (requires Docker). |
 | Env vars not loading in non-interactive shells | Inspect `head -20 ~/.bashrc` on Amarel — there's an early `return` skipping the source line. Move the source line to the top of `.bashrc`. |
+| `signature verification failed with UnknownError` when running "Install in SSH" from the marketplace | Phase 9 of the script disables this. If you skipped it, run: `ssh amarel.rutgers.edu 'mkdir -p ~/.vscode-server/data/Machine && python3 -c "import json,os,sys; p=sys.argv[1]; d=json.load(open(p)) if os.path.exists(p) and os.path.getsize(p) else {}; d[\"extensions.verifySignature\"]=False; json.dump(d, open(p,\"w\"), indent=4)" ~/.vscode-server/data/Machine/settings.json'`, then reload the VS Code window. |
 | Fingerprint doesn't match Rutgers's published value | **Stop.** Possible MITM. Contact OARC. |
 
 ---
@@ -182,9 +201,10 @@ published release becomes the default for new users automatically.
 
 ### Pinning ursetto/vscode-sysroot
 
-`scripts/build-sysroot.sh` has `URSETTO_COMMIT="${URSETTO_COMMIT:-main}"` —
-replace `main` with a specific SHA before tagging a release so the build is
-reproducible.
+`scripts/build-sysroot.sh` pins `URSETTO_COMMIT` to a specific SHA so two
+maintainers running the same build script produce identical tarballs. Bump
+the SHA explicitly after auditing upstream changes; never let it default
+back to `main`.
 
 ---
 
