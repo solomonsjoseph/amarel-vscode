@@ -1034,64 +1034,143 @@ crashes on CentOS 7 with the custom glibc node. The fix is to merge
 HTTPS to the marketplace still authenticates the download; only the
 second-layer VSIX check is skipped. **Run all steps yourself.**
 
+CentOS 7 ships **python2** by default; `python3` typically requires
+`module load python` or EPEL. Phase 9 therefore probes for `python3` first
+and falls back to `jq`, matching the ladder in `scripts/setup.sh` (~L486-L518).
+If neither `python3` nor `jq` is available on Amarel (most fresh HPC
+accounts have python2 only), the agent will tell you to run
+`module load python` on Amarel and re-trigger Phase 9.
+
 ### 9.0 — Probe (run yourself)
 
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
 set -uo pipefail
 F="$HOME/.vscode-server/data/Machine/settings.json"
-if [ ! -f "$F" ]; then echo "ABSENT"; exit 0; fi
-python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print('SET' if d.get('extensions.verifySignature') is False else 'NOT_SET')" "$F" 2>/dev/null || echo "PARSE_ERROR"
+
+# JSON tool detection (needed for 9.1 atomic merge).
+# CentOS 7 ships python2 by default; python3 requires `module load python` or EPEL.
+if command -v python3 >/dev/null 2>&1; then
+  TOOL=python3
+elif command -v jq >/dev/null 2>&1; then
+  TOOL=jq
+else
+  echo "TOOL=NONE"
+  exit 0
+fi
+echo "TOOL=$TOOL"
+
+# Settings file state.
+if [ ! -f "$F" ]; then
+  echo "STATE=ABSENT"
+  exit 0
+fi
+
+case "$TOOL" in
+  python3)
+    python3 - "$F" <<'PY' 2>/dev/null || echo "STATE=PARSE_ERROR"
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print("STATE=PARSE_ERROR"); sys.exit(0)
+print("STATE=SET" if d.get("extensions.verifySignature") is False else "STATE=NOT_SET")
+PY
+    ;;
+  jq)
+    if   jq -e '."extensions.verifySignature" == false' "$F" >/dev/null 2>&1; then echo "STATE=SET"
+    elif jq -e '.' "$F" >/dev/null 2>&1; then echo "STATE=NOT_SET"
+    else echo "STATE=PARSE_ERROR"; fi
+    ;;
+esac
 REMOTE
 ```
 
-- `SET` → skip 9.1 entirely (already configured on re-run). Advance to Phase 10.
-- `ABSENT`, `NOT_SET`, or `PARSE_ERROR` → run 9.1.
+Parse the two tokens (`TOOL=…` and `STATE=…`) from the output:
+
+- `TOOL=NONE` → **escalate to user**: tell them to either `module load python`
+  on Amarel and re-run Phase 9, or contact OARC to enable `python3` / `jq`.
+  Do not attempt 9.1.
+- `TOOL=python3` or `TOOL=jq`, `STATE=SET` → already configured; **skip 9.1**,
+  advance to Phase 10.
+- `TOOL=python3` or `TOOL=jq`, `STATE=NOT_SET` or `STATE=ABSENT` → proceed to
+  9.1 using the matching tool branch.
+- `STATE=PARSE_ERROR` → settings.json is malformed (distinct from missing
+  tool); ask user how to proceed — either back up and overwrite, or have them
+  fix the JSON manually.
 
 ### 9.1 — Merge setting (run yourself)
+
+Pick the branch matching the `TOOL=…` token from 9.0. Both branches are
+atomic (write to a tempfile on the same filesystem, then rename) and
+idempotent.
+
+**TOOL=python3 branch:**
 
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
 set -euo pipefail
-SETTINGS_DIR="$HOME/.vscode-server/data/Machine"
-SETTINGS_FILE="$SETTINGS_DIR/settings.json"
-mkdir -p "$SETTINGS_DIR"
-
-python3 - "$SETTINGS_FILE" <<'PY'
-import json, os, sys
-path = sys.argv[1]
-data = {}
-if os.path.exists(path) and os.path.getsize(path) > 0:
-    with open(path) as f:
-        try:
-            data = json.load(f)
-        except json.JSONDecodeError as exc:
-            sys.exit(f"ERR: {path} is not valid JSON ({exc}); refusing to overwrite")
-    if not isinstance(data, dict):
-        sys.exit(f"ERR: {path} root is not a JSON object; refusing to overwrite")
-data["extensions.verifySignature"] = False
-tmp = path + ".tmp"
-with open(tmp, "w") as f:
-    json.dump(data, f, indent=4); f.write("\n")
-os.replace(tmp, path)
+mkdir -p "$HOME/.vscode-server/data/Machine"
+python3 - <<'PY'
+import json, os, tempfile
+p = os.path.expanduser("~/.vscode-server/data/Machine/settings.json")
+try:
+    d = json.load(open(p))
+except Exception:
+    d = {}
+d["extensions.verifySignature"] = False
+with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(p), delete=False) as t:
+    json.dump(d, t, indent=4)
+    tmp = t.name
+os.replace(tmp, p)
 PY
-
-# Post-write verification
-python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d.get('extensions.verifySignature') is False, d; print('✓ verified:', json.dumps(d))" "$SETTINGS_FILE"
 REMOTE
 ```
 
-**Success:** `✓ verified: {"extensions.verifySignature": false, ...}` (any
-pre-existing keys preserved).
+**TOOL=jq branch:**
 
-### 9.2 — Verify
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+set -euo pipefail
+DIR="$HOME/.vscode-server/data/Machine"
+F="$DIR/settings.json"
+mkdir -p "$DIR"
+TMP=$(mktemp "$DIR/settings.json.XXXXXX")
+if [ -f "$F" ]; then
+  jq '. + {"extensions.verifySignature": false}' "$F" > "$TMP"
+else
+  printf '{"extensions.verifySignature": false}\n' | jq '.' > "$TMP"
+fi
+mv -f "$TMP" "$F"
+REMOTE
+```
 
-The post-write assertion in 9.1 serves as the verify step. If it passed,
-you're done.
+Note: `mktemp` is invoked **inside** `$DIR` so the subsequent `mv` is
+atomic on the same filesystem (rename across filesystems is not atomic).
 
-**If you see** `ERR: ... is not valid JSON`: the user's existing `settings.json`
-is malformed. The script refused to touch it. Inspect it yourself (benign
-read-only, agent-autonomous):
+### 9.2 — Verify (tool-agnostic)
+
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+set -uo pipefail
+F="$HOME/.vscode-server/data/Machine/settings.json"
+if command -v python3 >/dev/null 2>&1; then
+  python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["extensions.verifySignature"] is False' "$F" \
+    && echo VERIFIED || { echo FAIL_VERIFY; exit 1; }
+elif command -v jq >/dev/null 2>&1; then
+  jq -e '."extensions.verifySignature" == false' "$F" >/dev/null \
+    && echo VERIFIED || { echo FAIL_VERIFY; exit 1; }
+else
+  echo "TOOL_MISSING"; exit 1
+fi
+REMOTE
+```
+
+**Success:** `VERIFIED` (any pre-existing keys preserved).
+
+**If you see `STATE=PARSE_ERROR` from 9.0, or `FAIL_VERIFY` here**: the
+user's existing `settings.json` is malformed. Inspect it (benign read-only,
+agent-autonomous):
 
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'cat ~/.vscode-server/data/Machine/settings.json'
@@ -1124,7 +1203,7 @@ already open (otherwise no action needed).
 **Common failures (linked recovery branches; none run on a clean first install):**
 
 - `expected GLIBC >= v2.28.0` → Phase 8 didn't take. Re-run 8.2; fix `~/.bashrc` if env var empty (8.3).
-- `signature verification failed with UnknownError` on "Install in SSH" → run **Phase 9**.
+- `signature verification failed with UnknownError` on "Install in SSH" → run **Phase 9**. If Phase 9 reports `TOOL=NONE`, have the user run `module load python` on Amarel first, then re-trigger Phase 9.
 - `Could not find pty 4 on pty host` → harmless cosmetic noise (seen in canonical manual run). Ignore.
 - VS Code prompts for password → SSH key auth not fully working. Re-run Phase 4.2 verify and Phase 4.3 ssh_config validation.
 - VS Code server segfaults / patching fails after Allow → likely patchelf issue; **Phase 7.7 should have caught this**, but re-run 7.7 → 7.8 if needed.
