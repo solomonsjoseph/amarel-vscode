@@ -51,14 +51,23 @@ git checkout "$URSETTO_COMMIT"
 echo "→ Building from $URSETTO_REPO @ $(git rev-parse --short HEAD)"
 
 # ─── Build the sysroot via Docker ──────────────────────────────────────────
-# Inline the upstream `make sysroot` target, MINUS the `-t` in `docker run -it`.
-# The pseudo-TTY flag fails on TTY-less CI runners ("the input device is not a
-# TTY") and aborts AFTER the multi-hour toolchain compile. The copy-out is a
-# plain `cp`, so no TTY is needed. (Upstream Makefile target, for reference:
-#   docker build -t vscode-sysroot --target sysroot .
-#   docker run -it --rm -v $PWD/toolchain:/out vscode-sysroot cp <tgz> /out/ )
+# Inline the upstream `make sysroot` target with two CI-specific fixes:
+#   1. Drop `-t` from `docker run -it` — pseudo-TTY fails on TTY-less runners.
+#   2. Pin the base image to ubuntu:22.04 LTS. The ursetto Dockerfile uses
+#      `ubuntu:latest` which now resolves to Ubuntu 26.04 (Resolute Rhino) on
+#      Docker Hub, breaking the crosstool-NG build. We patch the Dockerfile in
+#      the cloned work tree before building — we can't change the pinned upstream
+#      commit, but we own the build script.
+#   3. Use --progress=plain so the actual ct-ng error appears in CI logs rather
+#      than being consumed by the Docker progress-spinner animation (which hits
+#      the 2 MiB log limit before the real error is printed).
+
+# Patch ubuntu:latest → ubuntu:22.04 in the cloned Dockerfile.
+sed -i 's|^FROM ubuntu:latest|FROM ubuntu:22.04|g' Dockerfile
+echo "→ Patched Dockerfile FROM ubuntu:latest → ubuntu:22.04"
+
 mkdir -p toolchain
-docker build -t vscode-sysroot --target sysroot .
+docker build --progress=plain -t vscode-sysroot --target sysroot .
 docker run --rm -v "$(pwd)/toolchain:/out" vscode-sysroot cp vscode-sysroot-x86_64-linux-gnu.tgz /out/
 ls -l toolchain
 INTERMEDIATE_TARBALL="$(pwd)/toolchain/vscode-sysroot-x86_64-linux-gnu.tgz"
