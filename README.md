@@ -190,6 +190,14 @@ gh release create vX.Y.Z build/vscode-sysroot-x86_64-linux-gnu.tgz \
    --title "vX.Y.Z" --notes "Built from ursetto/vscode-sysroot @ <commit>"
 ```
 
+**CI alternative (recommended — and the only option on Apple Silicon):** push a
+`vX.Y.Z` tag, or run the **Build and release sysroot tarball** workflow from the
+*Actions* tab. `.github/workflows/build-and-release.yml` builds the tarball on a
+native x86_64 runner (avoiding the arm64/QEMU GMP failure that breaks the local
+build on Apple Silicon) and publishes the Release with the tarball plus a
+`checksums.txt` (a manual run tags the exact commit it builds from). Copy the
+printed SHA-256s into `assets/checksums.txt` afterward.
+
 The setup script downloads from `releases/latest/download/...`, so a freshly
 published release becomes the default for new users automatically.
 
