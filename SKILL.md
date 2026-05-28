@@ -357,6 +357,28 @@ Get-Content -Raw "$HOME\.ssh\id_ed25519_amarel.pub" | & ssh -tt `
 > **🔒 YOUR TURN:** Amarel's password prompt will appear in the terminal.
 > Type your password. **I cannot see what you type.**
 
+### 3.1.1 — Verify login (user step)
+
+`ssh-copy-id` itself recommends this: try logging in right now to confirm the key was accepted.
+
+> **🔒 YOUR TURN:** Run the login command and check that you get an Amarel shell prompt:
+>
+> **macOS/Linux:**
+> ```bash
+> ssh -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu
+> ```
+> **Windows PowerShell:**
+> ```powershell
+> ssh -i "$HOME\.ssh\id_ed25519_amarel" "<NetID>@amarel.rutgers.edu"
+> ```
+>
+> SSH will prompt for your **key passphrase** (the one you set in Phase 1.2 — not your Amarel password). Enter it and check the result:
+>
+> - **Success:** you see an Amarel shell prompt like `[<NetID>@amarel1 ~]$`. Type `exit` and let me know.
+> - **Failure:** `Permission denied (publickey,…)` — the key copy didn't take. Let me know and I'll diagnose.
+
+**Wait for user confirmation before advancing.**
+
 ### 3.1.5 — Dedupe `authorized_keys` (run yourself)
 
 `ssh-copy-id` matches by full line, so a re-run with any whitespace or comment
