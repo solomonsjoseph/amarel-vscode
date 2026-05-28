@@ -171,7 +171,7 @@ CFG=$(ssh -G amarel.rutgers.edu 2>/dev/null)
 echo "$CFG" | grep -qE '^identityfile.*id_ed25519_amarel' && \
 echo "$CFG" | grep -qE '^identitiesonly yes' && \
 echo "$CFG" | grep -qE '^addkeystoagent yes' && \
-echo "$CFG" | grep -qE '^user ' && CONFIG_OK=0 || CONFIG_OK=1
+echo "$CFG" | grep -qE '^user <NetID>$' && CONFIG_OK=0 || CONFIG_OK=1
 
 if [ "$KEY_OK" -eq 0 ] && [ "$CONFIG_OK" -eq 0 ]; then
   echo "SKIP: key auth + ssh_config already correct — skipping Phases 1–5"
@@ -191,7 +191,7 @@ $cfg = & ssh -G amarel.rutgers.edu 2>$null
 $configOk = ($cfg -match 'identityfile.*id_ed25519_amarel') -and
             ($cfg -match 'identitiesonly yes') -and
             ($cfg -match 'addkeystoagent yes') -and
-            ($cfg -match '^user ')
+            ($cfg -match '^user <NetID>$')
 if ($keyOk -and $configOk) { "SKIP: key auth + ssh_config already correct — skipping Phases 1–5" }
 else { "PROCEED: running key auth setup" }
 ```
@@ -288,6 +288,10 @@ ssh-keygen -lf "$HOME\.ssh\amarel_hostkey.pending"
 >
 > **Only continue if your output matches. A mismatch means a possible
 > man-in-the-middle attack — STOP and contact OARC.**
+>
+> If OARC confirms the host key was legitimately rotated and gives you the new
+> fingerprint out-of-band, replace the reference value above with the confirmed
+> one and re-run Phase 2. Never update the pin just because it stopped matching.
 
 ### 2.3 — Append exact temp file on user "yes" (run yourself)
 
@@ -482,8 +486,12 @@ ssh-add -l 2>$null | Select-String 'amarel-vscode'
 **macOS/Linux:**
 
 ```bash
-awk '/^Host amarel\.rutgers\.edu/,/^Host [^ ]/' ~/.ssh/config 2>/dev/null || true
+awk '/^Host amarel\.rutgers\.edu/{f=1;print;next} /^Host /{f=0} f' ~/.ssh/config 2>/dev/null || true
 ```
+
+(Do **not** use an awk range like `/^Host amarel…/,/^Host [^ ]/` — the start line
+also matches the end pattern, so on BSD awk the range collapses to just the header
+line and you never see the block body.)
 
 **Windows PowerShell:**
 
@@ -1062,9 +1070,12 @@ ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'echo "$VSCODE_SERVER_PATCHELF_P
 
 ### 8.3 — Nano fallback (if 8.2 prints empty)
 
-Most common cause: `~/.bashrc` has an early `return` for non-interactive
-shells that runs before the `source` line. Move the `source` block above any
-such `return`.
+Two causes seen in practice: (a) `~/.bashrc` has an early `return` for
+non-interactive shells that runs before the `source` line — move the `source`
+block above any such `return`; (b) the manual run's append landed mis-indented
+right after an NVM/`PATH` line when typed interactively, so the loader never
+ran. The nano fallback below sidesteps both by letting the user place two clean
+lines at the end of the file.
 
 Inspect first:
 
@@ -1108,9 +1119,13 @@ second-layer VSIX check is skipped. **Run all steps yourself.**
 CentOS 7 ships **python2** by default; `python3` typically requires
 `module load python` or EPEL. Phase 9 therefore probes for `python3` first
 and falls back to `jq`, matching the ladder in `scripts/setup.sh` (~L486-L518).
-If neither `python3` nor `jq` is available on Amarel (most fresh HPC
-accounts have python2 only), the agent will tell you to run
-`module load python` on Amarel and re-trigger Phase 9.
+Each Phase 9 remote shell also makes a best-effort attempt to `module load
+python` itself (sourcing the modules init first, since `module` is normally
+login-shell-only). If neither `python3` nor `jq` is available even after that
+(most fresh HPC accounts have python2 only), the agent will tell you to add
+`module load python` to `~/.bashrc` — above any non-interactive `return`, so it
+reaches the non-interactive shells the agent and VS Code use — then re-trigger
+Phase 9.
 
 ### 9.0 — Probe (run yourself)
 
@@ -1121,6 +1136,14 @@ F="$HOME/.vscode-server/data/Machine/settings.json"
 
 # JSON tool detection (needed for 9.1 atomic merge).
 # CentOS 7 ships python2 by default; python3 requires `module load python` or EPEL.
+# Best-effort: surface python3 in THIS non-interactive shell. `module` is usually
+# only defined for login shells, so source the modules init first, then load.
+if ! command -v python3 >/dev/null 2>&1; then
+  [ -f /etc/profile.d/modules.sh ] && . /etc/profile.d/modules.sh 2>/dev/null || true
+  if command -v module >/dev/null 2>&1; then
+    module load python3 2>/dev/null || module load python 2>/dev/null || true
+  fi
+fi
 if command -v python3 >/dev/null 2>&1; then
   TOOL=python3
 elif command -v jq >/dev/null 2>&1; then
@@ -1159,16 +1182,23 @@ REMOTE
 
 Parse the two tokens (`TOOL=…` and `STATE=…`) from the output:
 
-- `TOOL=NONE` → **escalate to user**: tell them to either `module load python`
-  on Amarel and re-run Phase 9, or contact OARC to enable `python3` / `jq`.
-  Do not attempt 9.1.
+- `TOOL=NONE` → even after the best-effort `module load` above, neither python3
+  nor jq is reachable from a non-interactive shell. A one-off `module load python`
+  in an *interactive* session will **not** help — the agent's `ssh … 'bash -se'`
+  opens a fresh non-interactive shell each time. **Escalate with the durable fix:**
+  have the user add `module load python` (or `python3`) to `~/.bashrc` *above* any
+  early non-interactive `return` (same spot as the Phase 8 loader), then re-trigger
+  Phase 9. Or contact OARC to enable `python3`/`jq`. Do not attempt 9.1.
 - `TOOL=python3` or `TOOL=jq`, `STATE=SET` → already configured; **skip 9.1**,
   advance to Phase 10.
 - `TOOL=python3` or `TOOL=jq`, `STATE=NOT_SET` or `STATE=ABSENT` → proceed to
   9.1 using the matching tool branch.
 - `STATE=PARSE_ERROR` → settings.json is malformed (distinct from missing
   tool); ask user how to proceed — either back up and overwrite, or have them
-  fix the JSON manually.
+  fix the JSON manually. **Note:** `python3`/`jq` also report this for a *valid*
+  JSON-with-comments (JSONC) file, which VS Code allows — inspect the file
+  (`cat`, see 9.2) before assuming real corruption. A clean first install has no
+  settings.json yet (`STATE=ABSENT`), so this only arises on re-runs.
 
 ### 9.1 — Merge setting (run yourself)
 
@@ -1182,6 +1212,12 @@ idempotent.
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
 set -euo pipefail
 mkdir -p "$HOME/.vscode-server/data/Machine"
+if ! command -v python3 >/dev/null 2>&1; then
+  [ -f /etc/profile.d/modules.sh ] && . /etc/profile.d/modules.sh 2>/dev/null || true
+  if command -v module >/dev/null 2>&1; then
+    module load python3 2>/dev/null || module load python 2>/dev/null || true
+  fi
+fi
 python3 - <<'PY'
 import json, os, tempfile
 p = os.path.expanduser("~/.vscode-server/data/Machine/settings.json")
@@ -1207,6 +1243,7 @@ DIR="$HOME/.vscode-server/data/Machine"
 F="$DIR/settings.json"
 mkdir -p "$DIR"
 TMP=$(mktemp "$DIR/settings.json.XXXXXX")
+trap 'rm -f "$TMP"' EXIT   # don't leave a stray settings.json.XXXXXX if jq fails
 if [ -f "$F" ]; then
   jq '. + {"extensions.verifySignature": false}' "$F" > "$TMP"
 else
@@ -1225,6 +1262,12 @@ atomic on the same filesystem (rename across filesystems is not atomic).
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
 set -uo pipefail
 F="$HOME/.vscode-server/data/Machine/settings.json"
+if ! command -v python3 >/dev/null 2>&1; then
+  [ -f /etc/profile.d/modules.sh ] && . /etc/profile.d/modules.sh 2>/dev/null || true
+  if command -v module >/dev/null 2>&1; then
+    module load python3 2>/dev/null || module load python 2>/dev/null || true
+  fi
+fi
 if command -v python3 >/dev/null 2>&1; then
   python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["extensions.verifySignature"] is False' "$F" \
     && echo VERIFIED || { echo FAIL_VERIFY; exit 1; }
@@ -1274,7 +1317,7 @@ already open (otherwise no action needed).
 **Common failures (linked recovery branches; none run on a clean first install):**
 
 - `expected GLIBC >= v2.28.0` → Phase 8 didn't take. Re-run 8.2; fix `~/.bashrc` if env var empty (8.3).
-- `signature verification failed with UnknownError` on "Install in SSH" → run **Phase 9**. If Phase 9 reports `TOOL=NONE`, have the user run `module load python` on Amarel first, then re-trigger Phase 9.
+- `signature verification failed with UnknownError` on "Install in SSH" → run **Phase 9**. If Phase 9 reports `TOOL=NONE`, have the user add `module load python` to `~/.bashrc` (above any non-interactive `return`) so python3 reaches non-interactive shells, then re-trigger Phase 9.
 - `Could not find pty 4 on pty host` → harmless cosmetic noise (seen in canonical manual run). Ignore.
 - VS Code prompts for password → SSH key auth not fully working. Re-run Phase 4.2 verify and Phase 4.3 ssh_config validation.
 - VS Code server segfaults / patching fails after Allow → likely patchelf issue; **Phase 7.7 should have caught this**, but re-run 7.7 → 7.8 if needed.

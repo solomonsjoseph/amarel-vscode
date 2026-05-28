@@ -51,7 +51,16 @@ git checkout "$URSETTO_COMMIT"
 echo "→ Building from $URSETTO_REPO @ $(git rev-parse --short HEAD)"
 
 # ─── Build the sysroot via Docker ──────────────────────────────────────────
-make
+# Inline the upstream `make sysroot` target, MINUS the `-t` in `docker run -it`.
+# The pseudo-TTY flag fails on TTY-less CI runners ("the input device is not a
+# TTY") and aborts AFTER the multi-hour toolchain compile. The copy-out is a
+# plain `cp`, so no TTY is needed. (Upstream Makefile target, for reference:
+#   docker build -t vscode-sysroot --target sysroot .
+#   docker run -it --rm -v $PWD/toolchain:/out vscode-sysroot cp <tgz> /out/ )
+mkdir -p toolchain
+docker build -t vscode-sysroot --target sysroot .
+docker run --rm -v "$(pwd)/toolchain:/out" vscode-sysroot cp vscode-sysroot-x86_64-linux-gnu.tgz /out/
+ls -l toolchain
 INTERMEDIATE_TARBALL="$(pwd)/toolchain/vscode-sysroot-x86_64-linux-gnu.tgz"
 [[ -f "$INTERMEDIATE_TARBALL" ]] || { echo "ERR: make did not produce expected tarball"; exit 1; }
 echo "→ ursetto build complete: $INTERMEDIATE_TARBALL"

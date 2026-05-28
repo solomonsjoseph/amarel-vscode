@@ -45,6 +45,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Free up disk space
+        # A full crosstool-NG/glibc-2.28/gcc source build inside Docker layers can
+        # exhaust the ~21 GB free on ubuntu-latest. Reclaim space the toolchain
+        # build does not need before starting (best-effort; never fail the build).
+        run: |
+          set -uo pipefail
+          echo "Before:"; df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/.ghcup 2>/dev/null || true
+          sudo docker image prune -af 2>/dev/null || true
+          echo "After:"; df -h /
+
       - name: Build sysroot tarball (native x86_64 Docker — no QEMU)
         run: |
           set -euo pipefail
