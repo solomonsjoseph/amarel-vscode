@@ -58,6 +58,12 @@ For every phase below:
    that phase, suggest the fix, and have them re-run the phase. Phases are
    idempotent.
 
+**LLM operator rule — single-line TTY hand-offs.** Never present a multi-line or
+`\`-continued command in a "🔒 YOUR TURN" block. Terminal paste mangles backslash
+continuations (the live run hit exactly this: `ssh-copy-id: ERROR: Too many
+arguments`). Collapse every command the user must type to a single line — they all
+fit well under 200 chars.
+
 If the user says "just run the script for me," point them at the one-shot
 fallback in the **Power-user path** section near the end of this file.
 
@@ -321,10 +327,7 @@ If `ALREADY WORKS`, skip to Phase 4.
 **macOS / Linux:**
 
 ```bash
-ssh-copy-id -i ~/.ssh/id_ed25519_amarel.pub \
-  -o PreferredAuthentications=password \
-  -o PubkeyAuthentication=no \
-  <NetID>@amarel.rutgers.edu
+ssh-copy-id -i ~/.ssh/id_ed25519_amarel.pub -o PreferredAuthentications=password -o PubkeyAuthentication=no <NetID>@amarel.rutgers.edu
 ```
 
 > **🔒 YOUR TURN:** `ssh-copy-id` will prompt for your **Amarel password**.
@@ -356,16 +359,39 @@ Get-Content -Raw "$HOME\.ssh\id_ed25519_amarel.pub" | & ssh -tt `
 > **🔒 YOUR TURN:** Amarel's password prompt will appear in the terminal.
 > Type your password. **I cannot see what you type.**
 
+### 3.1.5 — Dedupe `authorized_keys` (run yourself)
+
+`ssh-copy-id` matches by full line, so a re-run with any whitespace or comment
+drift can append a duplicate key — the live-run cleanup found three identical
+copies accumulated across sessions. After 3.1, collapse duplicates idempotently:
+
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
+```
+
+Best-effort only: on a first run with a passphrase-protected key this `BatchMode`
+ssh can't authenticate yet (the agent isn't loaded until Phase 4.1), so it may
+print `Permission denied (publickey,…)`. That's harmless here — it re-runs and
+cleans up duplicates after Phase 4 (same interaction the 3.2 note explains).
+Don't treat it as a failure.
+
 ### 3.2 — Verify key auth (run yourself)
 
 ```bash
 ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu 'echo ok' && echo "✓ key auth works"
 ```
 
-**If you see** `Permission denied (publickey…)`: the key install didn't take.
-Log in interactively (`ssh <NetID>@amarel.rutgers.edu`) and check that
-`~/.ssh/authorized_keys` on Amarel has a line ending in `amarel-vscode-…`.
-Permissions must be `600 ~/.ssh/authorized_keys` and `700 ~/.ssh`.
+**Expected-failure note (passphrase keys):** under `-o BatchMode=yes` this probe
+**cannot unlock a passphrase-encrypted key** until the agent is loaded in Phase
+4.1, so on a first run it returns `Permission denied (publickey,…)`. That is
+**expected** — do not treat it as a key-install failure. Proceed to Phase 4; the
+canonical end-to-end verification is **Phase 5** (after the agent holds the key).
+
+**Only treat this as a real problem** if `Permission denied` persists **after**
+Phase 4.2 shows the key loaded in the agent. In that case the key install didn't
+take: log in interactively (`ssh <NetID>@amarel.rutgers.edu`) and check that
+`~/.ssh/authorized_keys` on Amarel has a line ending in `amarel-vscode-…`, with
+permissions `600 ~/.ssh/authorized_keys` and `700 ~/.ssh`.
 
 **Wait for confirmation, then advance.**
 
@@ -401,6 +427,13 @@ If `LOADED`, skip to 4.2.
 ssh-add --apple-use-keychain ~/.ssh/id_ed25519_amarel
 ```
 
+**macOS keychain-label note (for a clean future reverse-out):** `ssh-add` prints
+a line like `Identity added: …/id_ed25519_amarel (amarel-vscode-…)`. You may
+record that label from the visible stdout the user pastes back. **Do NOT** run
+`security find-generic-password` or `security dump-keychain` to discover it —
+those are on the security deny-list. The label is already in plain `ssh-add`
+output; use that, never a keychain query.
+
 **Linux:**
 
 ```bash
@@ -415,9 +448,7 @@ one-time configuration. The skill sets up everything else automatically.
 **Windows PowerShell — start agent service, then add key:**
 
 ```powershell
-Get-Service ssh-agent | Set-Service -StartupType Automatic
-Start-Service ssh-agent
-ssh-add "$HOME\.ssh\id_ed25519_amarel"
+Get-Service ssh-agent | Set-Service -StartupType Automatic; Start-Service ssh-agent; ssh-add "$HOME\.ssh\id_ed25519_amarel"
 ```
 
 > **🔒 YOUR TURN:** `ssh-add` will prompt for your key passphrase (the one
@@ -627,22 +658,34 @@ If found and valid, skip to 6.4.
 
 ### 6.1 — Local search (run yourself)
 
-**macOS/Linux:**
+Search wide **before** any build fallback — the live run jumped to the Docker
+build too fast. Run these cheapest-first; stop at the first that finds a match.
+
+**macOS** (Spotlight index is fastest; `mdfind` is macOS-only):
+
+```bash
+mdfind -name 'vscode-sysroot-x86_64-linux-gnu.tgz' 2>/dev/null
+```
+
+**macOS/Linux** (home sweep, then a bounded full sweep only if home misses):
 
 ```bash
 find ~ -name 'vscode-sysroot-x86_64-linux-gnu.tgz' 2>/dev/null
+find / -name 'vscode-sysroot-x86_64-linux-gnu.tgz' -not -path '*/Library/*' -not -path '/private/var/*' 2>/dev/null
 ```
 
 **Windows PowerShell:**
 
 ```powershell
-Get-ChildItem -Path $HOME -Recurse -Filter vscode-sysroot-x86_64-linux-gnu.tgz `
-  -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+Get-ChildItem -Path $HOME -Recurse -Filter vscode-sysroot-x86_64-linux-gnu.tgz -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
 ```
 
-- **0 matches** → proceed to 6.2.
 - **1 match** → validate with `tar tzf <path> >/dev/null` then use it.
 - **2+ matches** → surface the list to the user and ask which to use.
+- **0 matches after all of the above** → **ask the user** "Do you have a
+  `vscode-sysroot` clone or tarball anywhere I haven't looked (external drive,
+  iCloud Drive, another machine)?" **before** advancing to 6.2/6.3. Do not
+  silently fall through to a 30–60 min build.
 
 ### 6.2 — Download from GitHub Release (run yourself if still missing)
 
@@ -696,11 +739,39 @@ else { "ABORT: SHA-256 MISMATCH"; exit 1 }
 
 ### 6.3 — Rare fallback: build locally (inform user only)
 
-If the GitHub Release download fails (release not yet published): inform the
-user that they can build the tarball locally via `./scripts/build-sysroot.sh`
-(requires Docker Desktop; takes 10–20 min; on Apple Silicon prepend
-`DOCKER_DEFAULT_PLATFORM=linux/amd64`). **Do not auto-trigger this** — it
-needs explicit user opt-in.
+Reached only if 6.2 can't download a Release. **First detect the local CPU
+architecture** — the build path differs sharply by arch:
+
+**macOS/Linux:**
+
+```bash
+uname -m
+```
+
+**Windows PowerShell:**
+
+```powershell
+$env:PROCESSOR_ARCHITECTURE
+```
+
+**If `arm64` / `aarch64` (e.g. Apple Silicon):** do **NOT** offer the local
+Docker build. The live run proved it fails — the ursetto Dockerfile builds
+crosstool-NG/GMP from source under QEMU-emulated `linux/amd64`, and GMP's
+`./configure` can't run its compiler feature-tests under qemu-user (dies after
+~7 min with `could not find a working compiler`). Escalate instead, in order of
+effort:
+> 1. **Publish a Release (recommended, durable fix):** the maintainer runs the
+>    planned `.github/workflows/build-and-release.yml` workflow (to be added) on a
+>    native `ubuntu-latest` (x86_64) runner — it builds and uploads the tarball +
+>    SHA-256s. Then 6.2 downloads it.
+> 2. Build on a **native x86_64 Linux host** (cloud VM / Intel Mac) and copy the
+>    tarball back into `<repo>/build/`.
+> 3. (Discouraged) attempt the QEMU build anyway, knowing it typically dies in
+>    the GMP stage.
+
+**If `x86_64` (Intel Mac / Linux):** the local Docker build is viable — offer
+`./scripts/build-sysroot.sh` (requires Docker Desktop; 10–20 min). Still requires
+explicit user opt-in; **never auto-run it.**
 
 ### 6.4 — Final validation before Phase 7 (run yourself)
 
