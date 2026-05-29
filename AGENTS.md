@@ -365,7 +365,14 @@ Get-Content -Raw "$HOME\.ssh\id_ed25519_amarel.pub" | & ssh -tt `
 
 ### 3.1.1 — Verify login (user step)
 
-`ssh-copy-id` itself recommends this: try logging in right now to confirm the key was accepted.
+**Ignore `ssh-copy-id`'s printed suggestion.** It outputs a command like:
+
+```
+Now try logging into the machine, with:
+  "ssh -i … -o 'PreferredAuthentications=password' -o 'PubkeyAuthentication=no' …"
+```
+
+That command disables public-key auth — it would test *password* login, not the key you just installed. Disregard it. Use the command below instead.
 
 > **🔒 YOUR TURN:** Run the login command and check that you get an Amarel shell prompt:
 >
