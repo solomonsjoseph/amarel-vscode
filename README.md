@@ -1,97 +1,91 @@
 # amarel-vscode
 
-LLM-agnostic skill that sets up **VS Code Remote-SSH** against the
-**Rutgers Amarel HPC cluster** (CentOS 7, glibc 2.17) using a custom-glibc
-sysroot. Fixes the dreaded:
+Fix the **`expected GLIBC >= v2.28.0`** error and set up VS Code Remote-SSH
+for the Rutgers Amarel HPC cluster — in about 5 minutes, with any LLM or no
+LLM at all.
 
-```
-expected GLIBC >= v2.28.0 (but found v2.17.0 instead)
-```
-
-After running this once, you connect to Amarel from VS Code in 2 clicks
-and **never type your Amarel password again**.
-
-**Works with:** Claude Code, OpenAI Codex CLI, Gemini CLI, Cursor, Cline,
-bare LLMs (ChatGPT / Claude.ai / Ollama), and **no LLM at all** — the
-setup scripts are plain bash / PowerShell.
+After setup you connect to Amarel from VS Code in two clicks and **never type
+your Amarel password again**.
 
 ---
 
-## Quick start (pick one)
+## Install
 
-### A. No LLM — just run the script
-
-```bash
-git clone https://github.com/solomonsjoseph/amarel-vscode.git
-cd amarel-vscode
-./scripts/setup.sh                # macOS / Linux
-# OR on Windows:
-pwsh scripts/setup.ps1
-```
-
-### B. Install as a local agent skill (Claude Code + Codex)
+### Claude Code or Codex (recommended)
 
 ```bash
 git clone https://github.com/solomonsjoseph/amarel-vscode.git
 cd amarel-vscode
-./install.sh                       # or: .\install.ps1   on Windows
-# Restart Claude Code or Codex so it reloads local skills.
+./install.sh          # macOS / Linux
+.\install.ps1         # Windows
 ```
 
-Claude Code exposes the slash command:
+Restart your session, then:
 
-```text
-/amarel-vscode-setup
-```
+- **Claude Code:** run `/amarel-vscode-setup`
+- **Codex:** ask — *"Set up VS Code Remote-SSH for me on Amarel."*
 
-Codex loads the same installed skill by name/description. Ask:
-
-```text
-Set up VS Code Remote-SSH for me on Amarel.
-```
-
-The agent walks you through Phases 0–10 **one command at a time** — copy
-each command into your terminal, paste the result back, advance. You can ask
-the agent to "just run the script" if you'd rather use path A.
-
-### C. Repo-local instructions for Gemini / Cursor / Cline
+### Gemini CLI, Cursor, or Cline
 
 ```bash
 git clone https://github.com/solomonsjoseph/amarel-vscode.git
 cd amarel-vscode
-gemini      # or open the folder in Cursor or VS Code with Cline
+gemini     # — or open this folder in VS Code with Cursor / Cline active
 ```
-Then ask the agent: *"Set up VS Code Remote-SSH for me on Amarel."*
 
-Each tool picks up its own instruction file (`AGENTS.md`, `GEMINI.md`) or
-the repo-level `AGENTS.md` convention. All defer to `AGENTS.md` for the
-canonical step-by-step runbook. The agent hands you one command at a time
-and waits for your output between phases.
+The tool auto-reads `AGENTS.md` / `GEMINI.md`. Ask:
+*"Set up VS Code Remote-SSH for me on Amarel."*
 
-### D. ChatGPT, Claude.ai, Ollama, LM Studio, etc.
+### No LLM — just run the script
 
-See [`docs/using-other-llms.md`](docs/using-other-llms.md) for a copy-paste
-prompt template. The TL;DR: paste `AGENTS.md`'s contents into your chat as
-context and ask the model to walk you through it.
+```bash
+./scripts/setup.sh          # macOS / Linux
+pwsh scripts/setup.ps1      # Windows
+```
 
-Total time on any path: ~5 min. You'll type your Amarel password exactly
-**once** and your SSH key passphrase exactly **once**. After that the OS
-keychain handles auth.
+The script is self-narrating and handles everything interactively.
+
+### ChatGPT, Claude.ai, or any bare LLM
+
+Paste this into a new chat (or share `AGENTS.md` as a file if your LLM
+supports uploads):
+
+```
+I'm a Rutgers researcher setting up VS Code Remote-SSH against the Amarel
+HPC cluster (CentOS 7, glibc 2.17). I'm using this repo:
+https://github.com/solomonsjoseph/amarel-vscode
+
+Read its AGENTS.md:
+https://raw.githubusercontent.com/solomonsjoseph/amarel-vscode/main/AGENTS.md
+
+Walk me through it step by step:
+- Give me ONE command at a time in a fenced code block.
+- Tell me the success marker so I know when it worked.
+- Wait for me to paste my terminal output before advancing.
+- Do NOT ask which OS I'm on — Phase 0 detects it automatically.
+- Do NOT run scripts/setup.sh on my behalf.
+
+Security rules:
+- Never read or display ~/.ssh/id_* private key files.
+- Never use sshpass, expect, or any password-feeding helper.
+- I will type my Amarel password and SSH passphrase directly into
+  interactive terminal prompts — never ask me to share them in chat.
+```
+
+> **Ollama / LM Studio / local LLMs:** smaller models often struggle
+> following the full runbook. For the most reliable experience, just run
+> `./scripts/setup.sh` directly — no LLM needed.
 
 ---
 
 ## Prerequisites
 
-Regardless of which path you pick:
+1. **Rutgers Amarel account** — request one via OARC if you don't have it.
+2. **Rutgers VPN connected** — Cisco AnyConnect or GlobalProtect.
+3. **VS Code** with the **Remote-SSH** extension (`ms-vscode-remote.remote-ssh`).
+4. **OpenSSH tools** — included by default on macOS and Windows 10/11 (1809+).
 
-1. **Valid Rutgers Amarel account.** If you don't have one, request access via OARC.
-2. **Connected to the Rutgers VPN.** The VPN gateway is where 2FA / Duo happens — once you're inside the VPN, Amarel doesn't re-challenge for 2FA on SSH connections.
-3. **VS Code installed** with the **Remote-SSH** extension (`ms-vscode-remote.remote-ssh`).
-4. **OpenSSH client tools.** Ship by default on macOS and Windows 10/11 (1809+) — no install needed for 99% of users.
-
-The skill/script detects the local OS during Phase 0, then checks the rest
-and aborts with a friendly message if anything's missing. You do not need to
-tell the agent whether you are on macOS, Linux, or Windows.
+Phase 0 of the skill detects your OS and confirms all of these automatically.
 
 ---
 
@@ -99,66 +93,19 @@ tell the agent whether you are on macOS, Linux, or Windows.
 
 | Phase | Action |
 |-------|--------|
-| 0 | Preflight (detect local OS, tools, VPN reachability, VS Code) |
-| 1 | Generate SSH keypair (`~/.ssh/id_ed25519_amarel`) — you pick the passphrase |
-| 2 | Show Amarel's host fingerprint, ask you to verify against Rutgers OARC's published value |
-| 3 | `ssh-copy-id` — installs your public key on Amarel (one Amarel password prompt) |
-| 4 | `ssh-add --apple-use-keychain` (Mac) / `ssh-add` (Windows) — passphrase saved to OS keychain |
-| 5 | Verify passwordless SSH works (`BatchMode=yes`, no fallback to password) |
-| 6 | Download sysroot tarball from GitHub Release, verify SHA-256 |
-| 7 | `scp` tarball to Amarel, extract under `~/.vscode-server/sysroot/`, edit `~/.bashrc` |
-| 8 | Verify env vars survive a non-interactive SSH session |
-| 9 | Merge `"extensions.verifySignature": false` into `~/.vscode-server/data/Machine/settings.json` on Amarel — workaround for the patched-glibc node breaking VSIX signature crypto on CentOS 7. Idempotent JSON merge. |
-| 10 | Print VS Code GUI steps |
+| 0 | Preflight — detect OS, check tools, verify VPN reachability |
+| 1 | Generate a dedicated SSH keypair (`~/.ssh/id_ed25519_amarel`) |
+| 2 | Display Amarel's host fingerprint — you verify it against OARC's published value |
+| 3 | `ssh-copy-id` — install your key on Amarel. **Your last Amarel password prompt ever.** |
+| 4 | `ssh-add` — save your key passphrase to the OS keychain |
+| 5 | Verify passwordless SSH works end-to-end |
+| 6 | Download the glibc 2.28 sysroot tarball from GitHub Releases, verify SHA-256 |
+| 7 | Copy the tarball to Amarel, extract it, wire up `~/.bashrc` |
+| 8 | Verify the glibc env vars load in a non-interactive SSH session |
+| 9 | Write `"extensions.verifySignature": false` to VS Code Server's settings on Amarel — required for extensions to install on CentOS 7 with the patched node binary |
+| 10 | Print the VS Code GUI steps — connect and you're done |
 
-After phase 10, open VS Code → **Remote-SSH: Connect to Host** → `amarel.rutgers.edu`. Done.
-
----
-
-## Security model
-
-Passwords are typed by you, into the OS terminal, never visible to the LLM
-or to any helper process. Specifically:
-
-| Material | Lives where | Agent can read? |
-|---|---|---|
-| Amarel password | Typed once into `ssh-copy-id` TTY → sent to Amarel sshd | **No.** TTY-attached prompt. |
-| Private SSH key | `~/.ssh/id_ed25519_amarel`, encrypted with passphrase | Forbidden by `SKILL.md`. |
-| Key passphrase | macOS Keychain / Windows Credential Manager (DPAPI) | **No.** Filesystem-inaccessible. |
-| Public SSH key | `~/.ssh/id_ed25519_amarel.pub`, plaintext | Yes — but it's public by design. |
-
-The setup scripts are forbidden from invoking `sshpass`, `expect`, the
-`security` CLI, or any other helper that could pipe a password through an
-agent's process tree. `SKILL.md` codifies these constraints so a reviewer
-can verify them by reading one file.
-
-See [`docs/security-review.md`](docs/security-review.md) for the full audit.
-
----
-
-## Architecture
-
-```
-   YOUR LAPTOP (macOS / Windows)                          AMAREL
-┌────────────────────────────────┐                ┌─────────────────────────┐
-│  VS Code (the desktop app)     │                │                         │
-│   + Remote-SSH extension       │                │  VS Code Server         │
-│         │                      │                │  ─ Headless Node.js     │
-│         │ shells out to        │                │  ─ Lives in             │
-│         ▼                      │                │    ~/.vscode-server/    │
-│  OpenSSH (`ssh`, `scp`)        │   SSH tunnel   │  ─ Patched at startup   │
-│         │                      │ ◄─────────────►│    against glibc 2.28   │
-│         │ key auth via         │                │    from the sysroot we  │
-│         ▼                      │                │    install              │
-│  ssh-agent ◄── OS keychain     │                │                         │
-└────────────────────────────────┘                └─────────────────────────┘
-```
-
-The sysroot is a tarball containing glibc 2.28 + libstdc++ + patchelf 0.18,
-extracted into the user's `$HOME` on Amarel. Three env vars
-(`VSCODE_SERVER_CUSTOM_GLIBC_LINKER`, `..._PATH`, `VSCODE_SERVER_PATCHELF_PATH`)
-tell VS Code's bootstrap to patchelf its node binary against this sysroot.
-This is Microsoft's [officially documented workaround](https://code.visualstudio.com/docs/remote/faq#_can-i-run-vs-code-server-on-older-linux-distributions).
+After Phase 10: **VS Code → Remote-SSH: Connect to Host → `amarel.rutgers.edu`**
 
 ---
 
@@ -166,13 +113,56 @@ This is Microsoft's [officially documented workaround](https://code.visualstudio
 
 | Symptom | Fix |
 |---------|-----|
-| `VPN check failed` | Connect to Rutgers VPN, re-run skill. |
-| `Permission denied (publickey,...)` after Phase 3 | Run `ssh -v amarel.rutgers.edu` to see what's blocking. Usually `~/.ssh/authorized_keys` permissions on Amarel — fix with `chmod 600 ~/.ssh/authorized_keys`. |
-| `expected GLIBC >= v2.28.0` still appears in Remote-SSH log | Phase 8 of the skill verifies this; if it passed and VS Code still errors, you likely have a stale `~/.vscode-server` from a previous attempt. Remove it: `ssh amarel.rutgers.edu 'chmod -R u+w ~/.vscode-server/cli && rm -rf ~/.vscode-server/cli'` and try again. |
-| Tarball download fails | The maintainer hasn't published a release yet, or your network blocks GitHub. Rebuild locally: `./scripts/build-sysroot.sh` (requires Docker). |
-| Env vars not loading in non-interactive shells | Inspect `head -20 ~/.bashrc` on Amarel — there's an early `return` skipping the source line. Move the source line to the top of `.bashrc`. |
-| `signature verification failed with UnknownError` when running "Install in SSH" from the marketplace | Phase 9 of the script disables this. If you skipped it, run: `ssh amarel.rutgers.edu 'mkdir -p ~/.vscode-server/data/Machine && python3 -c "import json,os,sys; p=sys.argv[1]; d=json.load(open(p)) if os.path.exists(p) and os.path.getsize(p) else {}; d[\"extensions.verifySignature\"]=False; json.dump(d, open(p,\"w\"), indent=4)" ~/.vscode-server/data/Machine/settings.json'`, then reload the VS Code window. |
-| Fingerprint doesn't match Rutgers's published value | **Stop.** Possible MITM. Contact OARC. |
+| `VPN check failed` | Connect to Rutgers VPN and re-run. |
+| `Permission denied (publickey,...)` after Phase 3 | Fix permissions on Amarel: `ssh amarel.rutgers.edu 'chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys'` |
+| `expected GLIBC >= v2.28.0` still appears | Phase 8 catches this. If it persists after Phase 8 passes, remove the stale server cache: `ssh amarel.rutgers.edu 'chmod -R u+w ~/.vscode-server/cli && rm -rf ~/.vscode-server/cli'` |
+| Tarball download fails | GitHub release not yet published, or your network blocks GitHub. Rebuild locally: `./scripts/build-sysroot.sh` (requires Docker). |
+| Env vars not loading in non-interactive shells | Check `~/.bashrc` on Amarel for an early `return` that skips the source line — move the sysroot block to the top. |
+| Extension install fails (`signature verification failed`) | Phase 9 handles this and is idempotent — re-run the skill from Phase 9. |
+| Host fingerprint doesn't match OARC's published value | **Stop immediately. Possible MITM attack. Contact OARC.** |
+
+---
+
+## Security
+
+Your credentials never enter the LLM's process:
+
+| Material | Where it goes | LLM can read it? |
+|---|---|---|
+| Amarel password | Typed into `ssh-copy-id` TTY → encrypted to Amarel sshd | **No** |
+| SSH key passphrase | Typed into `ssh-add` → stored in OS keychain | **No** |
+| Private key (`id_ed25519_amarel`) | Encrypted on disk | Forbidden by the skill |
+| Public key (`.pub`) | On disk; uploaded to Amarel | Yes — it's public by design |
+
+The skill is forbidden from using `sshpass`, `expect`, `security find-generic-password`, or any other helper that could pipe a secret through the LLM's process. After Phase 5, all SSH/SCP calls use `BatchMode=yes` — if key auth fails they error loudly rather than silently prompting for a password.
+
+The sysroot tarball is SHA-256 pinned in `assets/checksums.txt` and verified before extraction. Builds are reproducible via Docker (`scripts/build-sysroot.sh`).
+
+---
+
+## Architecture
+
+```
+   YOUR LAPTOP (macOS / Windows)                         AMAREL (CentOS 7)
+┌───────────────────────────────┐                ┌────────────────────────────┐
+│  VS Code (the desktop app)    │                │  VS Code Server            │
+│   + Remote-SSH extension      │                │  ─ Headless Node.js        │
+│            │                  │                │  ─ Lives in ~/.vscode-server│
+│            │ shells out to    │                │  ─ Patched at startup      │
+│            ▼                  │                │    against glibc 2.28      │
+│  OpenSSH (ssh, scp)           │   SSH tunnel   │    from the sysroot        │
+│            │                  │ ◄─────────────►│    this skill installs     │
+│            ▼                  │                └────────────────────────────┘
+│  ssh-agent ◄── OS keychain    │
+└───────────────────────────────┘
+```
+
+The sysroot (`vscode-sysroot-x86_64-linux-gnu.tgz`) contains glibc 2.28 +
+libstdc++ + patchelf 0.18, extracted into `$HOME` on Amarel. Three env vars
+written to `~/.bashrc` tell VS Code's bootstrap to patchelf its node binary
+against this sysroot on every server start. This is
+[Microsoft's documented workaround](https://code.visualstudio.com/docs/remote/faq#_can-i-run-vs-code-server-on-older-linux-distributions)
+for running VS Code Server on older glibc systems.
 
 ---
 
@@ -181,8 +171,8 @@ This is Microsoft's [officially documented workaround](https://code.visualstudio
 ### Releasing a new sysroot tarball
 
 ```bash
-./scripts/build-sysroot.sh             # produces build/vscode-sysroot-x86_64-linux-gnu.tgz
-# Update assets/checksums.txt with the SHA-256 the script prints
+./scripts/build-sysroot.sh    # produces build/vscode-sysroot-x86_64-linux-gnu.tgz
+# paste the printed SHA-256s into assets/checksums.txt, then:
 git add assets/checksums.txt
 git commit -m "checksums: bump to vX.Y.Z"
 git push
@@ -190,29 +180,29 @@ gh release create vX.Y.Z build/vscode-sysroot-x86_64-linux-gnu.tgz \
    --title "vX.Y.Z" --notes "Built from ursetto/vscode-sysroot @ <commit>"
 ```
 
-**CI alternative (recommended — and the only option on Apple Silicon):** push a
-`vX.Y.Z` tag, or run the **Build and release sysroot tarball** workflow from the
-*Actions* tab. `.github/workflows/build-and-release.yml` builds the tarball on a
-native x86_64 runner (avoiding the arm64/QEMU GMP failure that breaks the local
-build on Apple Silicon) and publishes the Release with the tarball plus a
-`checksums.txt` (a manual run tags the exact commit it builds from). Copy the
-printed SHA-256s into `assets/checksums.txt` afterward.
+**CI alternative (recommended on Apple Silicon):** push a `vX.Y.Z` tag or
+run the **Build and release sysroot tarball** workflow from the Actions tab.
+The workflow builds on a native x86_64 runner (avoiding the arm64/QEMU GMP
+failure on Apple Silicon) and publishes the release automatically.
 
-The setup script downloads from `releases/latest/download/...`, so a freshly
-published release becomes the default for new users automatically.
+### Keeping the runbooks in sync
+
+`SKILL.md` (Claude Code) and `AGENTS.md` (Codex / Cursor / Cline) must stay
+logically byte-identical in all non-framework-specific sections. `GEMINI.md`
+is a thin pointer — update only if phase numbers change. If you edit one
+runbook, edit all three.
 
 ### Adding a new platform
 
 1. Add `scripts/setup-<platform>.sh` (or `.ps1`).
-2. Update `SKILL.md` to dispatch on the new platform.
-3. Update the prerequisite table in this README.
+2. Update `SKILL.md` and `AGENTS.md` to dispatch on the new platform.
+3. Update the Prerequisites table in this README.
 
-### Pinning ursetto/vscode-sysroot
+### Pinning `ursetto/vscode-sysroot`
 
 `scripts/build-sysroot.sh` pins `URSETTO_COMMIT` to a specific SHA so two
-maintainers running the same build script produce identical tarballs. Bump
-the SHA explicitly after auditing upstream changes; never let it default
-back to `main`.
+maintainers running the same script produce identical tarballs. Bump the SHA
+explicitly after auditing upstream changes; never let it default back to `main`.
 
 ---
 

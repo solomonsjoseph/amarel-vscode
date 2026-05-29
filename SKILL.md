@@ -10,6 +10,12 @@ description: |
   Rutgers VPN connection and a valid Amarel account.
 ---
 
+> **Execution contract:**
+> 1. This skill executes `[EXEC]` steps autonomously via its Bash tool; it never asks the user to run them.
+> 2. All `[EXEC]` steps are noninteractive: SSH/SCP calls use `-o BatchMode=yes`; no interactive prompts are expected. **Key-auth denial scope (Phases 1–5):** before the key is loaded into the agent (Phase 4.1), the **skip probes** (Phase 1.0 Gate-1 and Phase 3.0) return `Permission denied (publickey,…)` *by construction* — this is an **expected routing signal**, not a failure (Phase 1.0 silences this probe's stderr; only its exit code routes SKIP/PROCEED). Treat an auth failure as a hard failure to escalate only (a) on any `[EXEC]` step in Phases 6–10, or (b) in Phases 1–5 if a denial persists **after** Phase 4.2 confirms the key is loaded (e.g. the Phase 4.2.1 dedupe should succeed once the key is loaded). Never re-run a `[TTY]` password/passphrase step (e.g. Phase 3.1) in response to an expected pre-load denial. Any *non-auth* error (network, missing tool, unexpected output) is always surfaced.
+> 3. Key state discovered during execution (`LOCAL_OS`, `NetID`, `REPO_ROOT`, `USE_TARBALL`) is recorded at the phase that first establishes it and reused in all subsequent phases without re-deriving.
+> 4. **Host lock:** The only target is `amarel.rutgers.edu`. Do not substitute any other hostname — not `amarel2.rutgers.edu`, not any other `*.rutgers.edu` host. Every `<NetID>@amarel.rutgers.edu` in this skill is a literal target, not a template.
+
 # amarel-vscode-setup
 
 > **Note:** This file is the Claude Code entry point. The same runbook lives
@@ -52,11 +58,40 @@ For every phase below:
    that phase, suggest the fix, and have them re-run the phase. Phases are
    idempotent.
 
-**LLM operator rule — single-line TTY hand-offs.** Never present a multi-line or
-`\`-continued command in a "🔒 YOUR TURN" block. Terminal paste mangles backslash
-continuations (the live run hit exactly this: `ssh-copy-id: ERROR: Too many
-arguments`). Collapse every command the user must type to a single line — they all
-fit well under 200 chars.
+**LLM operator rule — paste-safe TTY hand-offs (width budget).** A TTY command
+longer than ~70 characters wraps in the rendered terminal; the copied text then
+carries injected newlines **plus** the code-block indent, and the paste breaks
+(the live run hit `ssh-copy-id: ERROR: Too many arguments` / split tokens this
+way). Source being "one line" does NOT prevent this — line *length* vs terminal
+*width* is the cause. Rule:
+- TTY command <= ~70 chars → hand it inline as a single-line fenced block.
+- TTY command > ~70 chars → first stage it to a wrapper script via `[EXEC]`
+  (`~/.cache/amarel-vscode/step-<phase>.sh` with a `#!/usr/bin/env bash` shebang
+  so it runs under bash regardless of the user's login shell; Windows:
+  `$env:LOCALAPPDATA\amarel-vscode\step-<phase>.ps1`), then hand the user only
+  the short launcher: `bash <path>` (macOS/Linux) or
+  `pwsh -ep Bypass -File "<path>"` (Windows; `-ep` is short for
+  `-ExecutionPolicy`). Quote the path.
+  Launch via the interpreter (`bash`/`pwsh -File`), never `./file`. Remove the
+  staged file in the next `[EXEC]` verify. Today only Phase 3.1 exceeds the budget.
+
+**LLM operator rule — isolate the copy-paste payload.** The user must see at a
+glance exactly what to copy, and copy *only* that. Whenever you hand over a
+command to run or a value to type:
+- Put it in its **own standalone fenced code block** — on its own line, nothing
+  else inside the fence (no instructions, no comments, no success marker) and
+  **no leading `>` blockquote prefix on the fence**. The reference pattern is the
+  Phase 1.2 hand-off: the `> **🔒 YOUR TURN:** …` instruction is a blockquote,
+  then the command sits in a separate fence *outside* the quote. Do **not** nest
+  the fence inside the `>` quote — in a terminal that renders the command flush
+  against the instruction prose and the user copies both.
+- Keep every instruction ("run this", "type your passphrase when prompted",
+  "paste the last 5 lines back") as prose **outside** the fence.
+- Never embed a runnable command or paste-value inline in a sentence. Inline
+  backticks are for *referring* to a command, not handing one over — if it's
+  meant to be copied, it gets its own fence.
+- One payload per fence. Two commands → two fences with a line of prose between,
+  so the user can never select both as one blob.
 
 If the user says "just run the script for me," point them at the one-shot
 fallback in the **Power-user path** section near the end of this file.
@@ -83,17 +118,40 @@ continue; do not ask the user to self-identify their OS.
 
 ### TTY budget
 
-| | First run | Re-run |
-|---|---|---|
-| Phase 0 | 0 TTY prompts | 0 |
-| Phases 1–5 (key auth) | 1 `ssh-keygen` event (2 passphrase prompts — confirm pattern) + 1 Amarel password + 1 passphrase-to-agent | 0 if Phase 1.0 probe passes; on macOS/Windows the keychain persists across reboot; **on Linux the agent may re-prompt for the passphrase once per login session** unless gnome-keyring/KWallet autostart is configured |
-| Phases 6–9 | 0 | 0 |
-| Phase 10 | 0 (key auth in VS Code) | 0 |
+The complete human touch-point list — everything not on this list is `[EXEC]`:
+
+| # | Phase | Command / Action | Why human | OS |
+|---|---|---|---|---|
+| 1 | 1.2 | `ssh-keygen -t ed25519 …` | Passphrase prompt on TTY — LLM cannot see | All |
+| 2 | 3.1 | `bash ~/.cache/amarel-vscode/step-3.1.sh` (staged ssh-copy-id) | **⚠ LAST AMAREL PASSWORD EVER** — password on TTY | All |
+| 3 | 3.1.1 | `ssh -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu` | Key passphrase on TTY; confirms key installed | All |
+| 4 | 4.1 | `ssh-add --apple-use-keychain …` / `ssh-add …` | Passphrase to agent on TTY | All |
+| 5 | 10 | VS Code GUI — click Allow, watch status bar | No Bash equivalent | All |
+
+**TTY budget:** macOS = 5 · Linux = 5 · Windows = 6 (Phase 4.1 Windows has two
+mandatory steps: `Start-Service` + `ssh-add`. The Phase 4.4 `~/.zshrc` append
+is `[EXEC]`, not a hand-off — see Phase 4.4).
 
 **Linux keychain note:** The Linux per-session guarantee means zero prompts
 within a single login session. A reboot-spanning guarantee requires persistent
 keyring autostart that the skill cannot configure — the skill points the user
 at their distro docs and continues.
+
+### Heads-up: your terminal moments
+
+Tell the user up front (I run everything else myself via Bash). You will switch
+to your terminal **four** times (macOS/Linux) or **five** times (Windows), in
+this order:
+
+1. **Phase 1.2** — `ssh-keygen`: set a key passphrase (typed twice).
+2. **Phase 3.1** — install your key: your **last Amarel password ever**.
+3. **Phase 3.1.1** — test login: your key passphrase.
+4. **Phase 4.1** — `ssh-add`: your key passphrase, saved to the keychain.
+   *(Windows: also `Start-Service ssh-agent` first — needs admin PowerShell.)*
+
+I hand you each command when it's time and verify the result before advancing —
+so we keep them one at a time rather than all at once. Nothing else needs your
+terminal.
 
 ---
 
@@ -104,6 +162,7 @@ confirm Amarel is reachable on the VPN. **Run these yourself via Bash.**
 
 **macOS / Linux — run yourself:**
 
+[EXEC]
 ```bash
 case "$(uname -s)" in
   Darwin) echo "✓ OS: macOS" ;;
@@ -118,6 +177,7 @@ nc -z -w 5 amarel.rutgers.edu 22 && echo "✓ VPN: Amarel reachable" || echo "�
 
 **Windows PowerShell — run yourself:**
 
+[EXEC]
 ```powershell
 if ($IsWindows) { "✓ OS: Windows" } else { "✗ OS: not Windows" }
 foreach ($c in 'ssh','scp','ssh-keygen','ssh-add','ssh-keyscan') {
@@ -138,6 +198,33 @@ nothing below will work without it.
 
 **Record `LOCAL_OS` from the OS line, then ask the user for their NetID and advance.**
 
+### 0.1 — Fresh start or resume? (ask the user)
+
+Existing state from a previous run — an installed key, a deployed sysroot,
+merged settings — makes the skip-probes in Phases 1, 3, 4, 7, and 9 fire, so the
+skill fast-forwards and can report success **without re-exercising those steps**.
+That is the right behaviour for a normal resume, but it hides problems when
+something has drifted: you changed your Amarel password, rotated keys, or a
+prior run only half-finished. Offer the choice **before any setup work**:
+
+> **🔒 YOUR TURN — fresh start or resume?**
+> - Reply **`resume`** (default) to keep whatever is already set up — fastest,
+>   skips anything already done.
+> - Reply **`fresh`** to wipe what this skill created and run every phase from
+>   scratch. Pick this if you changed your Amarel password, want to re-key, or
+>   just want a clean verification run.
+
+**If the user chose `fresh`:** run the **`full`** reset from the `## Fresh start`
+section now — it removes the skill's `ssh_config` / `known_hosts` / `~/.zshrc`
+entries, deletes the local `id_ed25519_amarel` key pair, and wipes everything the
+skill deployed on Amarel (the `authorized_keys` line, the extracted
+`~/.vscode-server/sysroot` + `sysroot.sh`, and the `~/.bashrc` loader block), so
+**every** phase (1–9) re-runs from scratch. It never touches any other SSH host
+or key. Then begin at Phase 1.
+
+**If the user chose `resume` (or didn't answer):** continue to Phase 1 — the
+skip-probes handle the rest.
+
 ---
 
 ## Phase 1 — Generate the Amarel SSH key (idempotent)
@@ -153,11 +240,13 @@ loaded key does not falsely satisfy the gate.
 
 **macOS/Linux — run yourself:**
 
+[EXEC]
 ```bash
-# Gate 1: key auth
+# Gate 1: key auth (stderr silenced — only the exit code routes SKIP/PROCEED;
+# a pre-setup "Permission denied"/"Host key verification failed" here is normal)
 ssh -o BatchMode=yes -o ConnectTimeout=5 \
     -i ~/.ssh/id_ed25519_amarel \
-    <NetID>@amarel.rutgers.edu true 2>&1
+    <NetID>@amarel.rutgers.edu true 2>/dev/null
 KEY_OK=$?
 
 # Gate 2: ssh_config block has all required keys
@@ -176,6 +265,7 @@ fi
 
 **Windows PowerShell — run yourself:**
 
+[EXEC]
 ```powershell
 & ssh -o BatchMode=yes -o ConnectTimeout=5 `
     -i "$HOME\.ssh\id_ed25519_amarel" `
@@ -195,11 +285,13 @@ If output is `SKIP`, jump to **Phase 6**. Otherwise continue.
 ### 1.1 — Check if key exists (run yourself)
 
 **macOS/Linux:**
+[EXEC]
 ```bash
 test -f ~/.ssh/id_ed25519_amarel && echo "EXISTS — skip 1.2" || echo "MISSING — run keygen"
 ```
 
 **Windows PowerShell:**
+[EXEC]
 ```powershell
 if (Test-Path "$HOME\.ssh\id_ed25519_amarel") { "EXISTS — skip 1.2" } else { "MISSING — run keygen" }
 ```
@@ -214,18 +306,29 @@ If `EXISTS`, skip to Phase 2.
 
 **macOS/Linux:**
 
+[TTY]
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_amarel -C "amarel-vscode-$(whoami)@$(hostname)"
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_amarel -C amarel-vscode
 ```
 
 **Windows PowerShell:**
 
+[TTY]
 ```powershell
-ssh-keygen -t ed25519 -f "$HOME\.ssh\id_ed25519_amarel" -C "amarel-vscode-$env:USERNAME@$env:COMPUTERNAME"
+ssh-keygen -t ed25519 -f $HOME\.ssh\id_ed25519_amarel -C amarel-vscode
 ```
+
+**Operator note — do not "improve" the `-C` comment.** It is the fixed literal
+`amarel-vscode` (no `$(whoami)`/`$(hostname)`/`$env:` substitution, no quotes).
+Two reasons: (1) a quoted comment with a `$(…)` expansion wraps on paste and
+orphans the `-C` flag (`ssh-keygen: option requires an argument -- C` — the live
+run hit exactly this); (2) Phases 1.0, 4.0, and 4.2 identify the key by
+`grep amarel-vscode` against `ssh-add -l` output, so the comment must contain
+that exact token.
 
 **Wait for user "done", then verify the pub key exists yourself:**
 
+[EXEC]
 ```bash
 ls -l ~/.ssh/id_ed25519_amarel.pub
 ```
@@ -242,6 +345,7 @@ MITM on first connection.
 
 ### 2.0 — Check known_hosts (run yourself)
 
+[EXEC]
 ```bash
 grep -qE "^amarel\.rutgers\.edu " ~/.ssh/known_hosts 2>/dev/null && echo "ALREADY TRUSTED — skip Phase 2" || echo "NEEDS VERIFICATION"
 ```
@@ -257,6 +361,7 @@ the same file.
 
 **macOS/Linux:**
 
+[EXEC]
 ```bash
 ssh-keyscan -t ed25519 amarel.rutgers.edu 2>/dev/null > ~/.ssh/amarel_hostkey.pending
 ssh-keygen -lf ~/.ssh/amarel_hostkey.pending
@@ -264,6 +369,7 @@ ssh-keygen -lf ~/.ssh/amarel_hostkey.pending
 
 **Windows PowerShell:**
 
+[EXEC]
 ```powershell
 ssh-keyscan -t ed25519 amarel.rutgers.edu 2>$null | Set-Content "$HOME\.ssh\amarel_hostkey.pending"
 ssh-keygen -lf "$HOME\.ssh\amarel_hostkey.pending"
@@ -291,12 +397,14 @@ ssh-keygen -lf "$HOME\.ssh\amarel_hostkey.pending"
 
 **macOS/Linux:**
 
+[EXEC]
 ```bash
 cat ~/.ssh/amarel_hostkey.pending >> ~/.ssh/known_hosts && rm -f ~/.ssh/amarel_hostkey.pending && echo "✓ host key trusted"
 ```
 
 **Windows PowerShell:**
 
+[EXEC]
 ```powershell
 Add-Content -Path "$HOME\.ssh\known_hosts" -Value (Get-Content "$HOME\.ssh\amarel_hostkey.pending")
 Remove-Item "$HOME\.ssh\amarel_hostkey.pending"
@@ -314,6 +422,7 @@ so future logins use the key instead of a password.
 
 ### 3.0 — Re-probe key auth (run yourself)
 
+[EXEC]
 ```bash
 ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu true 2>/dev/null && echo "ALREADY WORKS — skip Phase 3" || echo "NEEDS key install"
 ```
@@ -322,15 +431,29 @@ If `ALREADY WORKS`, skip to Phase 4.
 
 ### 3.1 — Install public key (user TTY step — LAST password entry ever)
 
-**macOS / Linux:**
+**macOS / Linux.** This command is ~133+ chars and would wrap on paste, so
+stage it to a short wrapper first (run yourself):
 
+[EXEC]
 ```bash
-ssh-copy-id -i ~/.ssh/id_ed25519_amarel.pub -o PreferredAuthentications=password -o PubkeyAuthentication=no <NetID>@amarel.rutgers.edu
+mkdir -p ~/.cache/amarel-vscode
+cat > ~/.cache/amarel-vscode/step-3.1.sh <<'EOF'
+#!/usr/bin/env bash
+ssh-copy-id -i ~/.ssh/id_ed25519_amarel.pub -o PreferredAuthentications=password -o PubkeyAuthentication=no <NetID>@amarel.rutgers.edu 2>&1 | grep -Ev "^Now try|^and check to make sure"
+exit "${PIPESTATUS[0]}"
+EOF
 ```
 
-> **🔒 YOUR TURN:** `ssh-copy-id` will prompt for your **Amarel password**.
-> Type it once. This is the only time you will ever need it for VS Code.
-> **I cannot see what you type.**
+Then hand the user only the short runner (cannot wrap):
+
+[TTY]
+```bash
+bash ~/.cache/amarel-vscode/step-3.1.sh
+```
+
+> **🔒 YOUR TURN:** the wrapper runs `ssh-copy-id`, which will prompt for your
+> **Amarel password**. Type it once. This is the only time you will ever need it
+> for VS Code. **I cannot see what you type.**
 
 **Windows (no `ssh-copy-id`) — proven stdin-pipe pattern from `scripts/setup.ps1:213-220`:**
 
@@ -341,17 +464,31 @@ shell-quoted string. The `grep -qxF` guard prevents duplicate
 authorized_keys entries. (Do **not** use `grep -qxF "$(cat)"` inline — that
 would consume stdin into grep's argument and leave the append-cat empty.)
 
+Stage the proven pipe-`pubkey`-into-`ssh -tt` block to a `.ps1` first (run
+yourself). The `-tt` PTY allocation is what makes the password prompt appear —
+it is preserved verbatim inside the wrapper:
+
+[EXEC]
 ```powershell
-$remoteCmd = @'
-KEY="$(cat)"
+$dir = "$env:LOCALAPPDATA\amarel-vscode"; New-Item -ItemType Directory -Force -Path $dir | Out-Null
+@'
+$remoteCmd = @"
+KEY="`$(cat)"
 umask 077
 mkdir -p ~/.ssh && chmod 700 ~/.ssh
 touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
-grep -qxF "$KEY" ~/.ssh/authorized_keys || printf '%s\n' "$KEY" >> ~/.ssh/authorized_keys
-'@
-Get-Content -Raw "$HOME\.ssh\id_ed25519_amarel.pub" | & ssh -tt `
-    -o PreferredAuthentications=password -o PubkeyAuthentication=no `
-    "<NetID>@amarel.rutgers.edu" $remoteCmd
+grep -qxF "`$KEY" ~/.ssh/authorized_keys || printf '%s\n' "`$KEY" >> ~/.ssh/authorized_keys
+"@
+Get-Content -Raw "$HOME\.ssh\id_ed25519_amarel.pub" | & ssh -tt -o PreferredAuthentications=password -o PubkeyAuthentication=no "<NetID>@amarel.rutgers.edu" $remoteCmd
+'@ | Set-Content -Path "$dir\step-3.1.ps1" -Encoding UTF8
+```
+
+Then hand the user only the short launcher (quote the path — `$HOME` may contain
+spaces):
+
+[TTY]
+```powershell
+pwsh -ep Bypass -File "$env:LOCALAPPDATA\amarel-vscode\step-3.1.ps1"
 ```
 
 > **🔒 YOUR TURN:** Amarel's password prompt will appear in the terminal.
@@ -359,68 +496,42 @@ Get-Content -Raw "$HOME\.ssh\id_ed25519_amarel.pub" | & ssh -tt `
 
 ### 3.1.1 — Verify login (user step)
 
-**Ignore `ssh-copy-id`'s printed suggestion.** It outputs a command like:
+> **🔒 YOUR TURN:** Run the login command for your OS and check that you get an Amarel shell prompt.
 
+**macOS/Linux — copy this:**
+
+[TTY]
+```bash
+ssh -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu
 ```
-Now try logging into the machine, with:
-  "ssh -i … -o 'PreferredAuthentications=password' -o 'PubkeyAuthentication=no' …"
+
+**Windows PowerShell — copy this:**
+
+[TTY]
+```powershell
+ssh -i "$HOME\.ssh\id_ed25519_amarel" "<NetID>@amarel.rutgers.edu"
 ```
 
-That command disables public-key auth — it would test *password* login, not the key you just installed. Disregard it. Use the command below instead.
-
-> **🔒 YOUR TURN:** Run the login command and check that you get an Amarel shell prompt:
->
-> **macOS/Linux:**
-> ```bash
-> ssh -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu
-> ```
-> **Windows PowerShell:**
-> ```powershell
-> ssh -i "$HOME\.ssh\id_ed25519_amarel" "<NetID>@amarel.rutgers.edu"
-> ```
->
 > SSH will prompt for your **key passphrase** (the one you set in Phase 1.2 — not your Amarel password). Enter it and check the result:
 >
 > - **Success:** you see an Amarel shell prompt like `[<NetID>@amarel1 ~]$`. Type `exit` and let me know.
 > - **Failure:** `Permission denied (publickey,…)` — the key copy didn't take. Let me know and I'll diagnose.
 
+**After the user confirms a successful login, remove the staged wrapper (run yourself):**
+
+[EXEC]
+```bash
+rm -f ~/.cache/amarel-vscode/step-3.1.sh
+```
+
+Windows PowerShell:
+
+[EXEC]
+```powershell
+Remove-Item -Force "$env:LOCALAPPDATA\amarel-vscode\step-3.1.ps1" -ErrorAction SilentlyContinue
+```
+
 **Wait for user confirmation before advancing.**
-
-### 3.1.5 — Dedupe `authorized_keys` (run yourself)
-
-`ssh-copy-id` matches by full line, so a re-run with any whitespace or comment
-drift can append a duplicate key — the live-run cleanup found three identical
-copies accumulated across sessions. After 3.1, collapse duplicates idempotently:
-
-```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
-```
-
-Best-effort only: on a first run with a passphrase-protected key this `BatchMode`
-ssh can't authenticate yet (the agent isn't loaded until Phase 4.1), so it may
-print `Permission denied (publickey,…)`. That's harmless here — it re-runs and
-cleans up duplicates after Phase 4 (same interaction the 3.2 note explains).
-Don't treat it as a failure.
-
-### 3.2 — Verify key auth (run yourself)
-
-```bash
-ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu 'echo ok' && echo "✓ key auth works"
-```
-
-**Expected-failure note (passphrase keys):** under `-o BatchMode=yes` this probe
-**cannot unlock a passphrase-encrypted key** until the agent is loaded in Phase
-4.1, so on a first run it returns `Permission denied (publickey,…)`. That is
-**expected** — do not treat it as a key-install failure. Proceed to Phase 4; the
-canonical end-to-end verification is **Phase 5** (after the agent holds the key).
-
-**Only treat this as a real problem** if `Permission denied` persists **after**
-Phase 4.2 shows the key loaded in the agent. In that case the key install didn't
-take: log in interactively (`ssh <NetID>@amarel.rutgers.edu`) and check that
-`~/.ssh/authorized_keys` on Amarel has a line ending in `amarel-vscode-…`, with
-permissions `600 ~/.ssh/authorized_keys` and `700 ~/.ssh`.
-
-**Wait for confirmation, then advance.**
 
 ---
 
@@ -433,12 +544,14 @@ passphrase, and write a strict `ssh_config` block that VS Code will use.
 
 **macOS/Linux:**
 
+[EXEC]
 ```bash
 ssh-add -l 2>/dev/null | grep -q amarel-vscode && echo "LOADED — skip 4.1" || echo "NOT LOADED — run ssh-add"
 ```
 
 **Windows PowerShell** (the `ssh-agent` service must be running — if `ssh-add -l` errors with "Could not open a connection", start it first via `Start-Service ssh-agent`):
 
+[EXEC]
 ```powershell
 $keyLoaded = (ssh-add -l 2>$null | Select-String -Quiet 'amarel-vscode')
 if ($keyLoaded) { "LOADED — skip 4.1" } else { "NOT LOADED — run ssh-add" }
@@ -450,12 +563,13 @@ If `LOADED`, skip to 4.2.
 
 **macOS:**
 
+[TTY]
 ```bash
 ssh-add --apple-use-keychain ~/.ssh/id_ed25519_amarel
 ```
 
 **macOS keychain-label note (for a clean future reverse-out):** `ssh-add` prints
-a line like `Identity added: …/id_ed25519_amarel (amarel-vscode-…)`. You may
+a line like `Identity added: …/id_ed25519_amarel (amarel-vscode)`. You may
 record that label from the visible stdout the user pastes back. **Do NOT** run
 `security find-generic-password` or `security dump-keychain` to discover it —
 those are on the security deny-list. The label is already in plain `ssh-add`
@@ -463,6 +577,7 @@ output; use that, never a keychain query.
 
 **Linux:**
 
+[TTY]
 ```bash
 ssh-add ~/.ssh/id_ed25519_amarel
 ```
@@ -472,15 +587,42 @@ On reboot, you may need to re-enter once unless you configure gnome-keyring or
 KWallet for persistent autostart. See your distro's documentation for that
 one-time configuration. The skill sets up everything else automatically.
 
-**Windows PowerShell — start agent service, then add key:**
+**Windows PowerShell — start the agent service, then add the key (user TTY step).**
 
+The OpenSSH agent service must be running before `ssh-add`, and to keep SSH
+passwordless across reboots the service should be set to auto-start.
+Configuring or starting a Windows service needs an **Administrator** PowerShell
+(right-click PowerShell → "Run as administrator"). This is advice, not a hard
+rule — **you** choose whether to make the persistent change. Tell the user the
+elevation requirement up front so they decide:
+
+- **Recommended — auto-start on every boot** (the Windows equivalent of the
+  macOS Keychain auto-load; keeps SSH passwordless after reboots). In an
+  **Administrator** PowerShell:
+  [TTY]
+  ```powershell
+  Get-Service ssh-agent | Set-Service -StartupType Automatic
+  ```
+- **Or skip that line** if you'd rather not make a persistent change — you'll
+  just re-start the service yourself after each reboot.
+
+Then start the service now and add your key (still an Administrator PowerShell):
+
+[TTY]
 ```powershell
-Get-Service ssh-agent | Set-Service -StartupType Automatic; Start-Service ssh-agent; ssh-add "$HOME\.ssh\id_ed25519_amarel"
+Start-Service ssh-agent
 ```
 
-> **🔒 YOUR TURN:** `ssh-add` will prompt for your key passphrase (the one
-> from Phase 1.2). After this, the OS keychain stores it permanently (macOS /
-> Windows) or for this session (Linux). **I cannot see what you type.**
+[TTY]
+```powershell
+ssh-add "$HOME\.ssh\id_ed25519_amarel"
+```
+
+> **🔒 YOUR TURN:** `ssh-add` will prompt for your key passphrase (from Phase
+> 1.2). After this the keychain stores it (auto-start = across reboots; manual
+> = this login session). **I cannot see what you type.** If `Set-Service` /
+> `Start-Service` reports "Access is denied," your PowerShell isn't elevated —
+> reopen it as Administrator and re-run.
 
 **Wait for user "done".**
 
@@ -488,15 +630,43 @@ Get-Service ssh-agent | Set-Service -StartupType Automatic; Start-Service ssh-ag
 
 **macOS/Linux:**
 
+[VERIFY]
+Command:  ssh-add -l | grep amarel-vscode
+Pass:     line containing "amarel-vscode" printed
+Fail:     no output / "The agent has no identities"
+On fail:  re-run Phase 4.1 (ssh-add)
+Advance:  Phase 4.2.1
 ```bash
 ssh-add -l | grep amarel-vscode && echo "✓ key in agent"
 ```
 
 **Windows PowerShell:**
 
+[VERIFY]
+Command:  ssh-add -l | Select-String 'amarel-vscode'
+Pass:     line containing "amarel-vscode" printed
+Fail:     no output
+On fail:  re-run Phase 4.1 (ssh-add + Start-Service ssh-agent)
+Advance:  Phase 4.2.1
 ```powershell
 ssh-add -l 2>$null | Select-String 'amarel-vscode'
 ```
+
+### 4.2.1 — Dedupe `authorized_keys` on Amarel (run yourself)
+
+Now that the key is loaded in the agent, a `BatchMode` SSH authenticates — so
+this dedupe actually runs (it was previously misplaced before the key load and
+always failed). `ssh-copy-id` matches by full line, so whitespace/comment drift
+across re-runs can append duplicate keys (the live run found three identical
+copies). `sort -u` is idempotent:
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
+```
+
+If this returns `Permission denied`, the key isn't really loaded — re-run Phase
+4.2 verify (and 4.1 if needed) before continuing. Otherwise advance to Phase 4.3.
 
 ### 4.3 — Write strict ssh_config (run yourself)
 
@@ -508,6 +678,7 @@ ssh-add -l 2>$null | Select-String 'amarel-vscode'
 
 **macOS/Linux:**
 
+[EXEC]
 ```bash
 awk '/^Host amarel\.rutgers\.edu/{f=1;print;next} /^Host /{f=0} f' ~/.ssh/config 2>/dev/null || true
 ```
@@ -518,6 +689,7 @@ line and you never see the block body.)
 
 **Windows PowerShell:**
 
+[EXEC]
 ```powershell
 $lines = Get-Content "$HOME\.ssh\config" -ErrorAction SilentlyContinue
 $inBlock = $false
@@ -551,6 +723,7 @@ Host amarel.rutgers.edu
 
 **Append command (macOS/Linux):**
 
+[EXEC]
 ```bash
 cat >> ~/.ssh/config <<'EOF'
 
@@ -576,6 +749,7 @@ Follows the same parse → diff → ask logic as macOS/Linux above. If the
 mismatching values, surface the diff and ask the user to edit manually.
 Note: `UseKeychain yes` is **macOS-only** and is OMITTED on Windows. `ControlMaster` is not supported on Windows OpenSSH — omit all three Control* lines on Windows.
 
+[EXEC]
 ```powershell
 $cfg = @"
 
@@ -595,6 +769,12 @@ manually, or run `Repair-AuthorizedKeyPermission`.
 
 **Verify resolved config on all OSes (run yourself):**
 
+[VERIFY]
+Command:  ssh -G amarel.rutgers.edu | grep -E …
+Pass:     all five lines present: user <NetID>, identityfile id_ed25519_amarel, identitiesonly yes, addkeystoagent yes, controlmaster auto
+Fail:     any of the five lines missing or wrong value
+On fail:  re-edit ~/.ssh/config per decision logic above; re-verify
+Advance:  Phase 4.4 (macOS) or Phase 5 (Linux/Windows)
 ```bash
 ssh -G amarel.rutgers.edu | grep -E '^(user|identityfile|identitiesonly|addkeystoagent|controlmaster) '
 ```
@@ -610,30 +790,30 @@ macOS 15 (Sequoia) broke persistent keychain auto-load: `UseKeychain yes` no
 longer reloads the key into the agent automatically after a reboot. Without
 this fix, the first `ssh` after a reboot prompts for the passphrase again.
 
-**Probe — check if fix already present (run yourself, macOS only):**
+**Self-guarding append (run yourself, macOS only).** One atomic command: the
+`grep -qF` guard and the append are a single statement, so any number of
+re-runs yields exactly one copy (this replaced a probe-then-append pattern that
+could double-append across sessions). It is **not** a TTY hand-off — the
+appended `ssh-add` reads the passphrase silently from the Keychain:
 
+[EXEC]
 ```bash
-grep -q 'id_ed25519_amarel' ~/.zshrc 2>/dev/null && echo "PRESENT — skip" || echo "ABSENT — add it"
+grep -qF '# Amarel HPC — re-load SSH key from Keychain' ~/.zshrc 2>/dev/null || cat >> ~/.zshrc <<'EOF'
+
+# Amarel HPC — re-load SSH key from Keychain on each shell (macOS Sequoia fix)
+ssh-add --apple-use-keychain ~/.ssh/id_ed25519_amarel 2>/dev/null
+EOF
 ```
 
-**If ABSENT:**
-
-> **🔒 YOUR TURN:** Run this single command — it appends the fix without opening an editor:
->
-> ```bash
-> tee -a ~/.zshrc <<'EOF'
->
-> # Amarel HPC — re-load SSH key from Keychain on each shell (macOS Sequoia fix)
-> ssh-add --apple-use-keychain ~/.ssh/id_ed25519_amarel 2>/dev/null
-> EOF
-> ```
->
-> The `2>/dev/null` suppresses "identity already added" when the key is already loaded. The passphrase is read silently from the macOS Keychain — no prompt.
+The appended `ssh-add` runs at each future shell startup and reads the
+passphrase silently from the macOS Keychain. The `2>/dev/null` suppresses
+"identity already added" when the key is already loaded.
 
 **Verify (run yourself after user "done"):**
 
+[EXEC]
 ```bash
-grep -q 'id_ed25519_amarel' ~/.zshrc && echo "✓ ~/.zshrc updated" || echo "✗ line missing — repeat YOUR TURN above"
+grep -q 'id_ed25519_amarel' ~/.zshrc && echo "✓ ~/.zshrc updated" || echo "✗ line missing — re-run the append above"
 ```
 
 *Linux:* skip — the agent is session-scoped and this pattern doesn't help.  
@@ -648,6 +828,12 @@ grep -q 'id_ed25519_amarel' ~/.zshrc && echo "✓ ~/.zshrc updated" || echo "✗
 **Goal:** Prove that a non-interactive `ssh` succeeds with no prompts.
 This is what VS Code's Remote-SSH will use. **Run yourself.**
 
+[VERIFY]
+Command:  ssh -o BatchMode=yes -o ConnectTimeout=10 amarel.rutgers.edu 'echo ok; hostname; whoami'
+Pass:     three lines: "ok", Amarel hostname (e.g. amarel1.amarel.rutgers.edu), NetID
+Fail:     hangs, "Permission denied", or fewer than three lines
+On fail:  re-run Phase 4.2 verify and Phase 4.3 ssh_config validation
+Advance:  Phase 6
 ```bash
 ssh -o BatchMode=yes -o ConnectTimeout=10 amarel.rutgers.edu 'echo ok; hostname; whoami'
 ```
@@ -666,6 +852,7 @@ If their output shows `Authentications that can continue: publickey,…` and
 then fails, the `authorized_keys` permissions on Amarel are wrong — the
 agent can fix that autonomously:
 
+[EXEC]
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'chmod 600 ~/.ssh/authorized_keys; chmod 700 ~/.ssh'
 ```
@@ -685,6 +872,7 @@ than assuming the LLM's cwd:
 
 **macOS/Linux:**
 
+[EXEC]
 ```bash
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
 if [ -z "$REPO_ROOT" ]; then
@@ -695,6 +883,7 @@ fi
 
 **Windows PowerShell:**
 
+[EXEC]
 ```powershell
 $REPO_ROOT = git rev-parse --show-toplevel 2>$null
 if (-not $REPO_ROOT) {
@@ -710,6 +899,7 @@ is resolved relative to `REPO_ROOT` so the agent's cwd does not matter.
 
 **macOS/Linux:**
 
+[EXEC]
 ```bash
 TARBALL="$REPO_ROOT/build/vscode-sysroot-x86_64-linux-gnu.tgz"
 if [ -f "$TARBALL" ] && tar tzf "$TARBALL" >/dev/null 2>&1; then
@@ -721,6 +911,7 @@ fi
 
 **Windows PowerShell:**
 
+[EXEC]
 ```powershell
 $tarball = "$REPO_ROOT\build\vscode-sysroot-x86_64-linux-gnu.tgz"
 if ((Test-Path $tarball) -and (tar tzf $tarball > $null 2>&1; $LASTEXITCODE -eq 0)) {
@@ -739,6 +930,7 @@ run the home-directory sweep instead.
 
 **macOS** — Spotlight search (run yourself):
 
+[EXEC]
 ```bash
 mdfind -name 'vscode-sysroot-x86_64-linux-gnu.tgz' 2>/dev/null
 ```
@@ -748,6 +940,7 @@ mdfind -name 'vscode-sysroot-x86_64-linux-gnu.tgz' 2>/dev/null
 
 **Linux** — home sweep (run yourself; skip on macOS):
 
+[EXEC]
 ```bash
 find ~ -name 'vscode-sysroot-x86_64-linux-gnu.tgz' 2>/dev/null
 ```
@@ -757,6 +950,7 @@ find ~ -name 'vscode-sysroot-x86_64-linux-gnu.tgz' 2>/dev/null
 
 **Windows PowerShell** — home sweep (run yourself):
 
+[EXEC]
 ```powershell
 Get-ChildItem -Path $HOME -Recurse -Filter vscode-sysroot-x86_64-linux-gnu.tgz -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
 ```
@@ -768,6 +962,7 @@ Get-ChildItem -Path $HOME -Recurse -Filter vscode-sysroot-x86_64-linux-gnu.tgz -
 
 **macOS/Linux:**
 
+[EXEC]
 ```bash
 mkdir -p "$REPO_ROOT/build"
 curl -fL https://github.com/solomonsjoseph/amarel-vscode/releases/latest/download/vscode-sysroot-x86_64-linux-gnu.tgz \
@@ -776,6 +971,7 @@ curl -fL https://github.com/solomonsjoseph/amarel-vscode/releases/latest/downloa
 
 **Windows PowerShell:**
 
+[EXEC]
 ```powershell
 New-Item -ItemType Directory -Force -Path "$REPO_ROOT\build" | Out-Null
 Invoke-WebRequest -Uri https://github.com/solomonsjoseph/amarel-vscode/releases/latest/download/vscode-sysroot-x86_64-linux-gnu.tgz `
@@ -784,6 +980,13 @@ Invoke-WebRequest -Uri https://github.com/solomonsjoseph/amarel-vscode/releases/
 
 **Verify SHA-256 against `assets/checksums.txt`:**
 
+[VERIFY]
+Command:  sha256 compare against assets/checksums.txt
+Pass:     "✓ SHA-256 matches"
+Warn:     "WARN: checksum not recorded" — proceed but note
+Fail:     "ABORT: SHA-256 MISMATCH"
+On fail:  do not extract; tell user to file an issue; re-download
+Advance:  Phase 6.4
 ```bash
 _sha256() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
@@ -804,6 +1007,13 @@ fi
 
 **Windows PowerShell checksum verify:**
 
+[VERIFY]
+Command:  Get-FileHash compare against checksums.txt
+Pass:     "✓ SHA-256 matches"
+Warn:     "WARN: checksum not recorded" — proceed but note
+Fail:     "ABORT: SHA-256 MISMATCH"
+On fail:  do not extract; tell user to file an issue; re-download
+Advance:  Phase 6.4
 ```powershell
 $expected = (Select-String -Path "$REPO_ROOT\assets\checksums.txt" -Pattern 'vscode-sysroot-x86_64-linux-gnu\.tgz').Line.Split()[0]
 $actual   = (Get-FileHash -Algorithm SHA256 "$REPO_ROOT\build\vscode-sysroot-x86_64-linux-gnu.tgz").Hash.ToLower()
@@ -821,12 +1031,14 @@ architecture** — the build path differs sharply by arch:
 
 **macOS/Linux:**
 
+[EXEC]
 ```bash
 uname -m
 ```
 
 **Windows PowerShell:**
 
+[EXEC]
 ```powershell
 $env:PROCESSOR_ARCHITECTURE
 ```
@@ -854,12 +1066,14 @@ explicit user opt-in; **never auto-run it.**
 
 **macOS/Linux:**
 
+[VERIFY] — exit code 0 = "✓ tarball is well-formed"; non-zero = delete and re-download from 6.2
 ```bash
 tar tzf "$REPO_ROOT/build/vscode-sysroot-x86_64-linux-gnu.tgz" >/dev/null && echo "✓ tarball is well-formed" || echo "✗ tarball is corrupt — delete and re-download"
 ```
 
 **Windows PowerShell:**
 
+[VERIFY] — exit code 0 = "✓ tarball is well-formed"; non-zero = delete and re-download from 6.2
 ```powershell
 tar tzf "$REPO_ROOT\build\vscode-sysroot-x86_64-linux-gnu.tgz" > $null 2>&1
 if ($LASTEXITCODE -eq 0) { "✓ tarball is well-formed" } else { "✗ tarball is corrupt — delete and re-download" }
@@ -884,12 +1098,14 @@ any failures. **All autonomous `ssh`/`scp` from here use `-o BatchMode=yes`.**
 
 **macOS/Linux:**
 
+[EXEC]
 ```bash
 scp -o BatchMode=yes "$REPO_ROOT/build/vscode-sysroot-x86_64-linux-gnu.tgz" <NetID>@amarel.rutgers.edu:~/
 ```
 
 **Windows PowerShell:**
 
+[EXEC]
 ```powershell
 scp -o BatchMode=yes "$REPO_ROOT\build\vscode-sysroot-x86_64-linux-gnu.tgz" "<NetID>@amarel.rutgers.edu:~/"
 ```
@@ -898,12 +1114,14 @@ scp -o BatchMode=yes "$REPO_ROOT\build\vscode-sysroot-x86_64-linux-gnu.tgz" "<Ne
 
 **macOS/Linux:**
 
+[EXEC]
 ```bash
 scp -o BatchMode=yes "$REPO_ROOT/assets/sysroot.sh" <NetID>@amarel.rutgers.edu:~/
 ```
 
 **Windows PowerShell:**
 
+[EXEC]
 ```powershell
 scp -o BatchMode=yes "$REPO_ROOT\assets\sysroot.sh" "<NetID>@amarel.rutgers.edu:~/"
 ```
@@ -913,6 +1131,7 @@ scp -o BatchMode=yes "$REPO_ROOT\assets\sysroot.sh" "<NetID>@amarel.rutgers.edu:
 If the `scp` of `sysroot.sh` fails (as happened in the canonical manual run),
 fetch it directly on Amarel and verify its content before installing:
 
+[EXEC]
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
 set -euo pipefail
@@ -938,6 +1157,7 @@ Mechanical health probe: checks the two anchor files exist and patchelf is
 ≥ 0.18. Emits exactly one token (`OK_HEALTHY` or `NEEDS_INSTALL`) so the
 agent can route without parsing version strings:
 
+[EXEC]
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
 set -uo pipefail
@@ -963,6 +1183,7 @@ Reach this ONLY when 7.4 shows broken/partial state. Ask the user before wiping:
 
 On explicit user "yes":
 
+[EXEC]
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
 set -euo pipefail
@@ -973,6 +1194,7 @@ REMOTE
 
 ### 7.6 — Extract sysroot (run yourself)
 
+[EXEC]
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
 set -euo pipefail
@@ -995,6 +1217,12 @@ REMOTE
 Collect all failures before deciding on a remedy. Uses `-uo pipefail` (NOT
 `-euo`) so all three gates run even if one fails:
 
+[VERIFY]
+Command:  remote 3-gate check (files, exports, patchelf ≥ 0.18)
+Pass:     "✓ all verification gates passed"
+Fail:     "FAIL: <gate-names>" on stderr
+On fail:  route to Phase 7.8 branch matching failed gate(s); re-run 7.7 after remedy
+Advance:  Phase 8
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
 set -uo pipefail
@@ -1047,6 +1275,7 @@ Amarel) and 7.6 (extract). If still failing, escalate to the user.
 guard makes it safe if a partial earlier run already consumed the source
 file:
 
+[EXEC]
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
 set -euo pipefail
@@ -1069,6 +1298,7 @@ from the local shell before the script is sent to bash on Amarel, so no
 template substitution is needed — just make sure the local assignment
 runs immediately before the heredoc:
 
+[EXEC]
 ```bash
 EXPECTED_SHA=$(awk '$2=="patchelf-0.18.0-x86_64.tar.gz" {print $1}' "$REPO_ROOT/assets/checksums.txt")
 ```
@@ -1076,6 +1306,7 @@ EXPECTED_SHA=$(awk '$2=="patchelf-0.18.0-x86_64.tar.gz" {print $1}' "$REPO_ROOT/
 Then run the upgrade (note: unquoted `<<REMOTE` so `${EXPECTED_SHA}`
 expands locally; `\$` on remote-only vars keeps them deferred to Amarel):
 
+[EXEC]
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<REMOTE
 set -euo pipefail
@@ -1116,6 +1347,7 @@ yourself via `ssh -o BatchMode=yes`.**
 
 ### 8.1 — Idempotent append (run yourself)
 
+[EXEC]
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
 set -euo pipefail
@@ -1131,6 +1363,12 @@ REMOTE
 
 ### 8.2 — Verify env var (run yourself)
 
+[VERIFY]
+Command:  ssh -o BatchMode=yes … 'echo "$VSCODE_SERVER_PATCHELF_PATH"'
+Pass:     prints /home/<NetID>/.vscode-server/sysroot/usr/bin/patchelf
+Fail:     empty line
+On fail:  inspect ~/.bashrc (Phase 8.3); move source line above any early return
+Advance:  Phase 9
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'echo "$VSCODE_SERVER_PATCHELF_PATH"'
 ```
@@ -1148,6 +1386,7 @@ lines at the end of the file.
 
 Inspect first:
 
+[EXEC]
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'head -30 ~/.bashrc'
 ```
@@ -1155,20 +1394,27 @@ ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'head -30 ~/.bashrc'
 If the heredoc append didn't land cleanly (as happened in the canonical manual
 run), give the user this manual fallback:
 
-> **🔒 YOUR TURN:** SSH into Amarel and open `~/.bashrc` in a text editor:
->
-> ```bash
-> ssh <NetID>@amarel.rutgers.edu
-> nano ~/.bashrc
-> ```
->
-> Scroll to the very end and add these two lines:
->
-> ```
-> # VS Code Server custom glibc workaround
-> [ -f "$HOME/.vscode-server/sysroot.sh" ] && source "$HOME/.vscode-server/sysroot.sh"
-> ```
->
+> **🔒 YOUR TURN:** SSH into Amarel — copy this:
+
+[TTY]
+```bash
+ssh <NetID>@amarel.rutgers.edu
+```
+
+> Once you have the Amarel shell prompt, open `~/.bashrc` in an editor — copy this:
+
+[TTY]
+```bash
+nano ~/.bashrc
+```
+
+> Scroll to the very end and add these two lines (copy the block below):
+
+```
+# VS Code Server custom glibc workaround
+[ -f "$HOME/.vscode-server/sysroot.sh" ] && source "$HOME/.vscode-server/sysroot.sh"
+```
+
 > Save and exit: nano → Ctrl+O, Enter, Ctrl+X. Or vim → Esc, `:wq`, Enter.
 
 Then re-run 8.2 to confirm.
@@ -1198,6 +1444,7 @@ Phase 9.
 
 ### 9.0 — Probe (run yourself)
 
+[EXEC]
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
 set -uo pipefail
@@ -1258,8 +1505,7 @@ Parse the two tokens (`TOOL=…` and `STATE=…`) from the output:
   have the user add `module load python` (or `python3`) to `~/.bashrc` *above* any
   early non-interactive `return` (same spot as the Phase 8 loader), then re-trigger
   Phase 9. Or contact OARC to enable `python3`/`jq`. Do not attempt 9.1.
-- `TOOL=python3` or `TOOL=jq`, `STATE=SET` → already configured; **skip 9.1**,
-  advance to Phase 10.
+- `TOOL=python3` or `TOOL=jq`, `STATE=SET` → setting already correct; Phase 9.1 runs regardless (idempotent) — proceed to 9.1.
 - `TOOL=python3` or `TOOL=jq`, `STATE=NOT_SET` or `STATE=ABSENT` → proceed to
   9.1 using the matching tool branch.
 - `STATE=PARSE_ERROR` → settings.json is malformed (distinct from missing
@@ -1269,6 +1515,8 @@ Parse the two tokens (`TOOL=…` and `STATE=…`) from the output:
   (`cat`, see 9.2) before assuming real corruption. A clean first install has no
   settings.json yet (`STATE=ABSENT`), so this only arises on re-runs.
 
+> **Skip probe disabled — run on every execution.** The `verifySignature` fix is required for VS Code Server 1.99+ on CentOS 7 regardless of prior state.
+
 ### 9.1 — Merge setting (run yourself)
 
 Pick the branch matching the `TOOL=…` token from 9.0. Both branches are
@@ -1277,6 +1525,7 @@ idempotent.
 
 **TOOL=python3 branch:**
 
+[MANDATORY][EXEC]
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
 set -euo pipefail
@@ -1305,6 +1554,7 @@ REMOTE
 
 **TOOL=jq branch:**
 
+[MANDATORY][EXEC]
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
 set -euo pipefail
@@ -1327,6 +1577,12 @@ atomic on the same filesystem (rename across filesystems is not atomic).
 
 ### 9.2 — Verify (tool-agnostic)
 
+[VERIFY]
+Command:  tool-agnostic verifySignature=false check
+Pass:     "VERIFIED"
+Fail:     "FAIL_VERIFY" or "TOOL_MISSING"
+On fail:  inspect settings.json (cat command in 9.2); fix JSON syntax or re-run 9.1
+Advance:  Phase 10
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
 set -uo pipefail
@@ -1355,6 +1611,7 @@ REMOTE
 user's existing `settings.json` is malformed. Inspect it (benign read-only,
 agent-autonomous):
 
+[EXEC]
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'cat ~/.vscode-server/data/Machine/settings.json'
 ```
@@ -1378,10 +1635,18 @@ already open (otherwise no action needed).
 > 1. Open VS Code.
 > 2. `Cmd+Shift+P` (Mac) / `Ctrl+Shift+P` (Win/Linux).
 > 3. Type and run: **Remote-SSH: Connect to Host**.
-> 4. Pick `<NetID>@amarel.rutgers.edu` (or type it).
+> 4. From the list, pick the host **`amarel.rutgers.edu`**. The list shows host
+>    *aliases* from your SSH config, so this is just `amarel.rutgers.edu` — your
+>    NetID is already baked into the config; you do **not** type `NetID@host`.
 > 5. First time only: click **Allow** on the "OS unsupported" warning.
 > 6. Open View → Output, dropdown → Remote-SSH. Watch for `Server started`.
 > 7. Bottom-left status bar shows **SSH: amarel.rutgers.edu** (green).
+>
+> ⚠️ **Pick the right entry.** The dropdown may also list a separate
+> **`rutgers.edu`** entry (a different host that this skill did **not** create).
+> **Do not click `rutgers.edu`** — it will not connect to Amarel. Always choose
+> **`amarel.rutgers.edu`**. (That stray `rutgers.edu` entry is harmless for now;
+> cleaning it out of your SSH config is a separate fix we'll do later.)
 
 **Common failures (linked recovery branches; none run on a clean first install):**
 
@@ -1417,11 +1682,185 @@ You **MUST NOT**:
 - Add `-o PasswordAuthentication=yes` to any autonomous `ssh`/`scp` invocation.
 - Write any string the user typed during a password/passphrase prompt to a
   file, to memory, or back into the conversation transcript.
+- Write a typed password/passphrase into a **staged wrapper script**
+  (`~/.cache/amarel-vscode/step-*.sh`, `…\amarel-vscode\step-*.ps1`). Those are
+  *command* files — they hold only flags, paths, the NetID, the host, and (on
+  Windows) the public `.pub` key. The secret is always entered live at the
+  prompt, never written to disk.
 
 If the user reports their password was leaked or something looks suspicious,
 stop and tell them to rotate their Amarel password via Rutgers OARC.
 
 ---
+
+## Fresh start (reset before a clean run)
+
+This is what the **Phase 0.1** "fresh start" offer runs, and you can also use it
+standalone any time a prior partial run left duplicate or stale state. It wipes
+**only** what this skill creates and never touches any other SSH host (e.g. a
+personal `Host rutgers.edu`) or any other key, and never reads private-key
+contents. Two modes (the script takes one argument):
+
+- **`config`** (default — `bash reset.sh`): cleans config-level state only —
+  the `~/.zshrc` block, the skill's `Host amarel.rutgers.edu` `ssh_config`
+  block, the `known_hosts` entries, and dedupes Amarel's `authorized_keys`.
+  Leaves your key pair and the deployed sysroot in place.
+- **`full`** (`bash reset.sh full`): a complete wipe of everything the skill
+  created. On top of `config`, it deletes the local `id_ed25519_amarel` key pair
+  and, in one SSH call (while key auth still works), removes the skill's key from
+  Amarel's `authorized_keys`, deletes the deployed `~/.vscode-server/sysroot` +
+  `sysroot.sh` (and any leftover upload), and strips the `~/.bashrc` loader block
+  — forcing **every** phase (1–9) to re-run from scratch (you'll set a new
+  passphrase, enter your Amarel password once more, and re-deploy the sysroot).
+  This is the mode the Phase 0.1 "fresh start" offer uses. The Amarel-side wipe is
+  best-effort: if key auth is already broken it's skipped, and Phases 3/7 rebuild
+  that state anyway.
+
+Substitute the real NetID for `<NetID>`. Because the reset logic is long, stage
+it to `~/.cache/amarel-vscode/reset.sh` via `[EXEC]` first (same width-budget
+rule as Phase 3.1), with `<NetID>` substituted:
+
+[EXEC]
+```bash
+mkdir -p ~/.cache/amarel-vscode
+cat > ~/.cache/amarel-vscode/reset.sh <<'EOF'
+#!/usr/bin/env bash
+set -u
+MODE="${1:-config}"   # "config" (default) or "full" (also deletes the key pair)
+# 1) Remove the Amarel ssh-add block from ~/.zshrc (marker + the line after it)
+[ -f ~/.zshrc ] && sed -i.bak '/# Amarel HPC — re-load SSH key from Keychain/,+1d' ~/.zshrc && echo "✓ ~/.zshrc cleaned"
+# 2) Remove ONLY the skill-authored Host amarel.rutgers.edu block from ~/.ssh/config
+if [ -f ~/.ssh/config ]; then
+  cp ~/.ssh/config ~/.ssh/config.bak
+  awk '
+    /^Host[ \t]+amarel\.rutgers\.edu[ \t]*$/ { skip=1; next }
+    skip==1 {
+      if ($0 ~ /^Host[ \t]/) { skip=0 }
+      else if ($0 ~ /^[ \t]/ || $0 ~ /^[ \t]*$/) { next }
+      else { skip=0 }
+    }
+    { print }
+  ' ~/.ssh/config.bak > ~/.ssh/config && chmod 600 ~/.ssh/config && echo "✓ ~/.ssh/config: amarel block removed (others kept)"
+fi
+# 3) Remove all amarel.rutgers.edu lines (any algorithm) from known_hosts
+[ -f ~/.ssh/known_hosts ] && sed -i.bak '/^amarel\.rutgers\.edu /d' ~/.ssh/known_hosts && echo "✓ known_hosts: amarel entries removed"
+if [ "$MODE" = "full" ]; then
+  # 4) FULL only: remove EVERYTHING this skill deployed on Amarel in one SSH call
+  #    (best-effort, needs working key auth) — the skill's authorized_keys line, the
+  #    extracted ~/.vscode-server/sysroot + sysroot.sh, any leftover upload, and the
+  #    ~/.bashrc loader block. Runs while the current key still authenticates, BEFORE
+  #    the local key pair is deleted below.
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu '
+        sed -i.bak "/amarel-vscode/d" ~/.ssh/authorized_keys 2>/dev/null
+        rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz
+        [ -f ~/.bashrc ] && sed -i.bak -e "/# VS Code Server custom glibc workaround/d" -e "\#vscode-server/sysroot\.sh#d" ~/.bashrc
+      ' 2>/dev/null; then
+    echo "✓ Amarel: skill key, deployed sysroot, and ~/.bashrc loader removed"
+  else
+    echo "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)"
+  fi
+  # 5) FULL only: delete the local Amarel key pair so Phase 1.2 re-runs
+  rm -f ~/.ssh/id_ed25519_amarel ~/.ssh/id_ed25519_amarel.pub && echo "✓ local Amarel key pair deleted"
+else
+  # 4) CONFIG: dedupe authorized_keys on Amarel (best-effort; skipped if key auth not set up)
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys' 2>/dev/null; then
+    echo "✓ Amarel authorized_keys deduped"
+  else
+    echo "• Skipped Amarel dedupe (key auth not set up yet — that's fine)"
+  fi
+fi
+echo "Reset ($MODE) complete. Re-run the skill from Phase 0."
+EOF
+```
+
+Then hand the user the short launcher. For the Phase 0.1 "fresh start" offer use
+the `full` form; for a config-only repair omit the argument:
+
+> **🔒 YOUR TURN — macOS / Linux.** Full reset (re-keys — what "fresh start" uses) — copy this:
+
+[TTY]
+```bash
+bash ~/.cache/amarel-vscode/reset.sh full
+```
+
+Config-only reset (keeps your key pair) — copy this instead:
+
+[TTY]
+```bash
+bash ~/.cache/amarel-vscode/reset.sh
+```
+
+**Windows PowerShell:** stage an equivalent `reset.ps1` to
+`$env:LOCALAPPDATA\amarel-vscode\reset.ps1` (skip the macOS-only `~/.zshrc`
+step):
+
+[EXEC]
+```powershell
+$dir = "$env:LOCALAPPDATA\amarel-vscode"; New-Item -ItemType Directory -Force -Path $dir | Out-Null
+@'
+param([string]$Mode = 'config')   # 'config' (default) or 'full' (also deletes the key pair)
+Set-StrictMode -Version Latest
+# 1) Remove ONLY the skill-authored Host amarel.rutgers.edu block from $HOME\.ssh\config
+$config = "$HOME\.ssh\config"
+if (Test-Path $config) {
+  Copy-Item $config "$config.bak" -Force
+  $out = [System.Collections.Generic.List[string]]::new()
+  $skip = $false
+  foreach ($line in Get-Content $config) {
+    if ($line -match '^Host[ \t]+amarel\.rutgers\.edu[ \t]*$') { $skip = $true; continue }
+    if ($skip) {
+      if ($line -match '^Host[ \t]') { $skip = $false }
+      elseif ($line -match '^[ \t]' -or $line -match '^[ \t]*$') { continue }
+      else { $skip = $false }
+    }
+    if (-not $skip) { $out.Add($line) }
+  }
+  Set-Content -Path $config -Value $out -Encoding UTF8
+  "✓ ${config}: amarel block removed (others kept)"
+}
+# 2) Remove all amarel.rutgers.edu lines (any algorithm) from known_hosts
+$knownHosts = "$HOME\.ssh\known_hosts"
+if (Test-Path $knownHosts) {
+  Copy-Item $knownHosts "$knownHosts.bak" -Force
+  $filtered = Get-Content $knownHosts | Where-Object { $_ -notmatch '^amarel\.rutgers\.edu ' }
+  Set-Content -Path $knownHosts -Value $filtered -Encoding UTF8
+  "✓ known_hosts: amarel entries removed"
+}
+if ($Mode -eq 'full') {
+  # 3) FULL only: remove EVERYTHING this skill deployed on Amarel in one SSH call
+  #    (best-effort) — authorized_keys line, extracted sysroot + sysroot.sh, leftover
+  #    upload, and the ~/.bashrc loader block. Runs while the current key still works.
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sed -i.bak '/amarel-vscode/d' ~/.ssh/authorized_keys 2>/dev/null; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz; [ -f ~/.bashrc ] && sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc" 2>$null
+  if ($LASTEXITCODE -eq 0) { "✓ Amarel: skill key, deployed sysroot, and ~/.bashrc loader removed" } else { "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)" }
+  # 4) FULL only: delete the local Amarel key pair so Phase 1.2 re-runs
+  Remove-Item -Force "$HOME\.ssh\id_ed25519_amarel","$HOME\.ssh\id_ed25519_amarel.pub" -ErrorAction SilentlyContinue
+  "✓ local Amarel key pair deleted"
+} else {
+  # 3) CONFIG: dedupe authorized_keys on Amarel (best-effort; skipped if key auth not set up)
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys" 2>$null
+  if ($LASTEXITCODE -eq 0) { "✓ Amarel authorized_keys deduped" } else { "• Skipped Amarel dedupe (key auth not set up yet — that's fine)" }
+}
+"Reset ($Mode) complete. Re-run the skill from Phase 0."
+'@ | Set-Content -Path "$dir\reset.ps1" -Encoding UTF8
+```
+
+Then hand the user (use the `full` form for the Phase 0.1 "fresh start" offer):
+
+> **🔒 YOUR TURN — Windows.** Full reset (re-keys — what "fresh start" uses) — copy this:
+
+[TTY]
+```powershell
+pwsh -ep Bypass -File "$env:LOCALAPPDATA\amarel-vscode\reset.ps1" full
+```
+
+Config-only reset (keeps your key pair) — copy this instead:
+
+[TTY]
+```powershell
+pwsh -ep Bypass -File "$env:LOCALAPPDATA\amarel-vscode\reset.ps1"
+```
+
+After the reset, start again at Phase 0.
 
 ## Power-user path (one-shot script)
 
