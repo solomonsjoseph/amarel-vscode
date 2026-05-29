@@ -1387,7 +1387,7 @@ Parse the two tokens (`TOOL=…` and `STATE=…`) from the output:
   have the user add `module load python` (or `python3`) to `~/.bashrc` *above* any
   early non-interactive `return` (same spot as the Phase 8 loader), then re-trigger
   Phase 9. Or contact OARC to enable `python3`/`jq`. Do not attempt 9.1.
-- `TOOL=python3` or `TOOL=jq`, `STATE=SET` → setting already correct; the `[MANDATORY][EXEC]` in 9.1 runs regardless — proceed to 9.1 (idempotent, no harm).
+- `TOOL=python3` or `TOOL=jq`, `STATE=SET` → setting already correct; Phase 9.1 runs regardless (idempotent) — proceed to 9.1.
 - `TOOL=python3` or `TOOL=jq`, `STATE=NOT_SET` or `STATE=ABSENT` → proceed to
   9.1 using the matching tool branch.
 - `STATE=PARSE_ERROR` → settings.json is malformed (distinct from missing
