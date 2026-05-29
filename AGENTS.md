@@ -201,9 +201,11 @@ prior run only half-finished. Offer the choice **before any setup work**:
 
 **If the user chose `fresh`:** run the **`full`** reset from the `## Fresh start`
 section now — it removes the skill's `ssh_config` / `known_hosts` / `~/.zshrc`
-entries, deletes the local `id_ed25519_amarel` key pair, and removes that key
-from Amarel's `authorized_keys`, so Phases 1–5 re-run from scratch. It never
-touches any other SSH host or key. Then begin at Phase 1.
+entries, deletes the local `id_ed25519_amarel` key pair, and wipes everything the
+skill deployed on Amarel (the `authorized_keys` line, the extracted
+`~/.vscode-server/sysroot` + `sysroot.sh`, and the `~/.bashrc` loader block), so
+**every** phase (1–9) re-runs from scratch. It never touches any other SSH host
+or key. Then begin at Phase 1.
 
 **If the user chose `resume` (or didn't answer):** continue to Phase 1 — the
 skip-probes handle the rest.
@@ -1679,11 +1681,16 @@ contents. Two modes (the script takes one argument):
   the `~/.zshrc` block, the skill's `Host amarel.rutgers.edu` `ssh_config`
   block, the `known_hosts` entries, and dedupes Amarel's `authorized_keys`.
   Leaves your key pair and the deployed sysroot in place.
-- **`full`** (`bash reset.sh full`): everything in `config`, **plus** it deletes
-  the local `id_ed25519_amarel` key pair and removes that key from Amarel's
-  `authorized_keys` — forcing Phases 1–5 to re-run from scratch (you'll set a
-  new passphrase and enter your Amarel password once more). This is the mode the
-  Phase 0.1 "fresh start" offer uses.
+- **`full`** (`bash reset.sh full`): a complete wipe of everything the skill
+  created. On top of `config`, it deletes the local `id_ed25519_amarel` key pair
+  and, in one SSH call (while key auth still works), removes the skill's key from
+  Amarel's `authorized_keys`, deletes the deployed `~/.vscode-server/sysroot` +
+  `sysroot.sh` (and any leftover upload), and strips the `~/.bashrc` loader block
+  — forcing **every** phase (1–9) to re-run from scratch (you'll set a new
+  passphrase, enter your Amarel password once more, and re-deploy the sysroot).
+  This is the mode the Phase 0.1 "fresh start" offer uses. The Amarel-side wipe is
+  best-effort: if key auth is already broken it's skipped, and Phases 3/7 rebuild
+  that state anyway.
 
 Substitute the real NetID for `<NetID>`. Because the reset logic is long, stage
 it to `~/.cache/amarel-vscode/reset.sh` via `[EXEC]` first (same width-budget
@@ -1714,12 +1721,19 @@ fi
 # 3) Remove all amarel.rutgers.edu lines (any algorithm) from known_hosts
 [ -f ~/.ssh/known_hosts ] && sed -i.bak '/^amarel\.rutgers\.edu /d' ~/.ssh/known_hosts && echo "✓ known_hosts: amarel entries removed"
 if [ "$MODE" = "full" ]; then
-  # 4) FULL only: remove the skill's key from Amarel authorized_keys (best-effort,
-  #    needs working key auth) — runs while the current key still authenticates
-  if ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu 'sed -i.bak "/amarel-vscode$/d" ~/.ssh/authorized_keys' 2>/dev/null; then
-    echo "✓ Amarel: skill key removed from authorized_keys"
+  # 4) FULL only: remove EVERYTHING this skill deployed on Amarel in one SSH call
+  #    (best-effort, needs working key auth) — the skill's authorized_keys line, the
+  #    extracted ~/.vscode-server/sysroot + sysroot.sh, any leftover upload, and the
+  #    ~/.bashrc loader block. Runs while the current key still authenticates, BEFORE
+  #    the local key pair is deleted below.
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu '
+        sed -i.bak "/amarel-vscode$/d" ~/.ssh/authorized_keys 2>/dev/null
+        rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz
+        [ -f ~/.bashrc ] && sed -i.bak -e "/# VS Code Server custom glibc workaround/d" -e "\#vscode-server/sysroot\.sh#d" ~/.bashrc
+      ' 2>/dev/null; then
+    echo "✓ Amarel: skill key, deployed sysroot, and ~/.bashrc loader removed"
   else
-    echo "• Skipped Amarel key removal (key auth not active — Phase 3 re-installs)"
+    echo "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)"
   fi
   # 5) FULL only: delete the local Amarel key pair so Phase 1.2 re-runs
   rm -f ~/.ssh/id_ed25519_amarel ~/.ssh/id_ed25519_amarel.pub && echo "✓ local Amarel key pair deleted"
@@ -1788,9 +1802,11 @@ if (Test-Path $knownHosts) {
   "✓ known_hosts: amarel entries removed"
 }
 if ($Mode -eq 'full') {
-  # 3) FULL only: remove the skill's key from Amarel authorized_keys (best-effort)
-  & ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sed -i.bak '/amarel-vscode`$/d' ~/.ssh/authorized_keys" 2>$null
-  if ($LASTEXITCODE -eq 0) { "✓ Amarel: skill key removed from authorized_keys" } else { "• Skipped Amarel key removal (key auth not active — Phase 3 re-installs)" }
+  # 3) FULL only: remove EVERYTHING this skill deployed on Amarel in one SSH call
+  #    (best-effort) — authorized_keys line, extracted sysroot + sysroot.sh, leftover
+  #    upload, and the ~/.bashrc loader block. Runs while the current key still works.
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sed -i.bak '/amarel-vscode`$/d' ~/.ssh/authorized_keys 2>/dev/null; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz; [ -f ~/.bashrc ] && sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc" 2>$null
+  if ($LASTEXITCODE -eq 0) { "✓ Amarel: skill key, deployed sysroot, and ~/.bashrc loader removed" } else { "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)" }
   # 4) FULL only: delete the local Amarel key pair so Phase 1.2 re-runs
   Remove-Item -Force "$HOME\.ssh\id_ed25519_amarel","$HOME\.ssh\id_ed25519_amarel.pub" -ErrorAction SilentlyContinue
   "✓ local Amarel key pair deleted"
