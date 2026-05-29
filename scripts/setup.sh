@@ -264,6 +264,7 @@ phase_agent() {
 
   # SSH config — ensure VS Code's ssh uses keychain + agent forwarding cleanly.
   ensure_ssh_config_entry
+  ensure_sequoia_zshrc_fix
 }
 
 ensure_ssh_config_entry() {
@@ -281,6 +282,11 @@ ensure_ssh_config_entry() {
     use_keychain="  UseKeychain yes"
   fi
 
+  local control_path=""
+  control_path="  ControlMaster auto
+  ControlPath ~/.ssh/control-%r@%h:%p
+  ControlPersist 10m"
+
   cat >> "$SSH_CONFIG_PATH" <<EOF
 
 # Added by amarel-vscode skill on $(date +%F)
@@ -290,8 +296,25 @@ Host $AMAREL_HOST
   IdentitiesOnly yes
   AddKeysToAgent yes
 $use_keychain
+$control_path
 EOF
   info "~/.ssh/config entry added"
+}
+
+ensure_sequoia_zshrc_fix() {
+  # macOS Sequoia broke persistent keychain auto-load; re-add silently on each shell.
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  local zshrc="${HOME}/.zshrc"
+  if grep -q 'id_ed25519_amarel' "$zshrc" 2>/dev/null; then
+    info "~/.zshrc already has Amarel ssh-add line"
+    return 0
+  fi
+  cat >> "$zshrc" <<'EOF'
+
+# Amarel HPC — re-load SSH key from Keychain on each shell (macOS Sequoia fix)
+ssh-add --apple-use-keychain ~/.ssh/id_ed25519_amarel 2>/dev/null
+EOF
+  info "~/.zshrc updated with Sequoia keychain fix"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

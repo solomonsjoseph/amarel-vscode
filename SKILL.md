@@ -524,7 +524,7 @@ foreach ($l in $lines) {
 **Decision logic:**
 
 - **If no `Host amarel.rutgers.edu` block exists** → append the canonical block below.
-- **If a block exists but is missing or has wrong values for `User`, `IdentityFile`, `IdentitiesOnly`, `AddKeysToAgent`, or (macOS only) `UseKeychain`** → surface the diff to the user and ask them to edit the file manually (do not blindly overwrite — they may have custom `ProxyCommand`, `LocalForward`, etc.). Re-verify after user "done".
+- **If a block exists but is missing or has wrong values for `User`, `IdentityFile`, `IdentitiesOnly`, `AddKeysToAgent`, `ControlMaster`, or (macOS only) `UseKeychain`** → surface the diff to the user and ask them to edit the file manually (do not blindly overwrite — they may have custom `ProxyCommand`, `LocalForward`, etc.). Re-verify after user "done".
 
 **Canonical block to append if absent:**
 
@@ -535,9 +535,12 @@ Host amarel.rutgers.edu
     IdentitiesOnly yes
     AddKeysToAgent yes
     UseKeychain yes
+    ControlMaster auto
+    ControlPath ~/.ssh/control-%r@%h:%p
+    ControlPersist 10m
 ```
 
-*macOS only:* include `UseKeychain yes`. Linux and Windows: omit it.
+*macOS only:* include `UseKeychain yes`. Linux and Windows: omit it. `ControlMaster`/`ControlPath`/`ControlPersist` apply to all platforms — they multiplex VS Code's multiple SSH channels over one authenticated socket, eliminating repeated key negotiation.
 
 **Append command (macOS/Linux):**
 
@@ -550,6 +553,9 @@ Host amarel.rutgers.edu
     IdentitiesOnly yes
     AddKeysToAgent yes
     UseKeychain yes
+    ControlMaster auto
+    ControlPath ~/.ssh/control-%r@%h:%p
+    ControlPersist 10m
 EOF
 chmod 600 ~/.ssh/config
 ```
@@ -561,7 +567,7 @@ chmod 600 ~/.ssh/config
 Follows the same parse → diff → ask logic as macOS/Linux above. If the
 `Host amarel.rutgers.edu` block is absent, append; if it is present with
 mismatching values, surface the diff and ask the user to edit manually.
-Note: `UseKeychain yes` is **macOS-only** and is OMITTED on Windows.
+Note: `UseKeychain yes` is **macOS-only** and is OMITTED on Windows. `ControlMaster` is not supported on Windows OpenSSH — omit all three Control* lines on Windows.
 
 ```powershell
 $cfg = @"
@@ -583,13 +589,41 @@ manually, or run `Repair-AuthorizedKeyPermission`.
 **Verify resolved config on all OSes (run yourself):**
 
 ```bash
-ssh -G amarel.rutgers.edu | grep -E '^(user|identityfile|identitiesonly|addkeystoagent) '
+ssh -G amarel.rutgers.edu | grep -E '^(user|identityfile|identitiesonly|addkeystoagent|controlmaster) '
 ```
 
 Must show `user <NetID>`, `identityfile ~/.ssh/id_ed25519_amarel`,
-`identitiesonly yes`, `addkeystoagent yes`.
+`identitiesonly yes`, `addkeystoagent yes`, `controlmaster auto`.
 
 **Wait for verification to pass, then advance.**
+
+### 4.4 — macOS Sequoia keychain regression fix (macOS only)
+
+macOS 15 (Sequoia) broke persistent keychain auto-load: `UseKeychain yes` no
+longer reloads the key into the agent automatically after a reboot. Without
+this fix, the first `ssh` after a reboot prompts for the passphrase again.
+
+**Probe — check if fix already present (run yourself, macOS only):**
+
+```bash
+grep -q 'id_ed25519_amarel' ~/.zshrc 2>/dev/null && echo "PRESENT — skip" || echo "ABSENT — add it"
+```
+
+**If ABSENT:**
+
+> **🔒 YOUR TURN:** Add these two lines to the end of your `~/.zshrc`:
+>
+> ```bash
+> # Amarel HPC — re-load SSH key from Keychain on each shell (macOS Sequoia fix)
+> ssh-add --apple-use-keychain ~/.ssh/id_ed25519_amarel 2>/dev/null
+> ```
+>
+> The `2>/dev/null` suppresses "identity already added" when the key is already loaded. The passphrase is read silently from the macOS Keychain — no prompt.
+
+*Linux:* skip — the agent is session-scoped and this pattern doesn't help.  
+*Windows:* skip — the ssh-agent service persists across sessions without this workaround.
+
+**Wait for user "done", then advance.**
 
 ---
 
