@@ -14,6 +14,7 @@ description: |
 > 1. This skill executes `[EXEC]` steps autonomously via its Bash tool; it never asks the user to run them.
 > 2. All `[EXEC]` steps are noninteractive: SSH/SCP calls use `-o BatchMode=yes`; no interactive prompts are expected. If a credential prompt appears during an `[EXEC]` step, treat it as a failure and escalate to the user — do not wait.
 > 3. Key state discovered during execution (`LOCAL_OS`, `NetID`, `REPO_ROOT`, `USE_TARBALL`) is recorded at the phase that first establishes it and reused in all subsequent phases without re-deriving.
+> 4. **Host lock:** The only target is `amarel.rutgers.edu`. Do not substitute any other hostname — not `amarel2.rutgers.edu`, not any other `*.rutgers.edu` host. Every `<NetID>@amarel.rutgers.edu` in this skill is a literal target, not a template.
 
 # amarel-vscode-setup
 
