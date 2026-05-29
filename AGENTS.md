@@ -183,6 +183,31 @@ nothing below will work without it.
 
 **Record `LOCAL_OS` from the OS line, then ask the user for their NetID and advance.**
 
+### 0.1 — Fresh start or resume? (ask the user)
+
+Existing state from a previous run — an installed key, a deployed sysroot,
+merged settings — makes the skip-probes in Phases 1, 3, 4, 7, and 9 fire, so the
+skill fast-forwards and can report success **without re-exercising those steps**.
+That is the right behaviour for a normal resume, but it hides problems when
+something has drifted: you changed your Amarel password, rotated keys, or a
+prior run only half-finished. Offer the choice **before any setup work**:
+
+> **🔒 YOUR TURN — fresh start or resume?**
+> - Reply **`resume`** (default) to keep whatever is already set up — fastest,
+>   skips anything already done.
+> - Reply **`fresh`** to wipe what this skill created and run every phase from
+>   scratch. Pick this if you changed your Amarel password, want to re-key, or
+>   just want a clean verification run.
+
+**If the user chose `fresh`:** run the **`full`** reset from the `## Fresh start`
+section now — it removes the skill's `ssh_config` / `known_hosts` / `~/.zshrc`
+entries, deletes the local `id_ed25519_amarel` key pair, and removes that key
+from Amarel's `authorized_keys`, so Phases 1–5 re-run from scratch. It never
+touches any other SSH host or key. Then begin at Phase 1.
+
+**If the user chose `resume` (or didn't answer):** continue to Phase 1 — the
+skip-probes handle the rest.
+
 ---
 
 ## Phase 1 — Generate the Amarel SSH key (idempotent)
@@ -1644,14 +1669,25 @@ stop and tell them to rotate their Amarel password via Rutgers OARC.
 
 ## Fresh start (reset before a clean run)
 
-If a prior partial run left duplicate or stale state, hand the user this block
-to wipe **only** what this skill creates, then re-run from Phase 0. It does
-**not** touch any other SSH host (e.g. a personal `Host rutgers.edu`) and never
-reads or deletes private keys. Substitute the real NetID for `<NetID>`.
+This is what the **Phase 0.1** "fresh start" offer runs, and you can also use it
+standalone any time a prior partial run left duplicate or stale state. It wipes
+**only** what this skill creates and never touches any other SSH host (e.g. a
+personal `Host rutgers.edu`) or any other key, and never reads private-key
+contents. Two modes (the script takes one argument):
 
-Because the reset logic is long, stage it to `~/.cache/amarel-vscode/reset.sh`
-via `[EXEC]` first (same width-budget rule as Phase 3.1), with `<NetID>`
-substituted:
+- **`config`** (default — `bash reset.sh`): cleans config-level state only —
+  the `~/.zshrc` block, the skill's `Host amarel.rutgers.edu` `ssh_config`
+  block, the `known_hosts` entries, and dedupes Amarel's `authorized_keys`.
+  Leaves your key pair and the deployed sysroot in place.
+- **`full`** (`bash reset.sh full`): everything in `config`, **plus** it deletes
+  the local `id_ed25519_amarel` key pair and removes that key from Amarel's
+  `authorized_keys` — forcing Phases 1–5 to re-run from scratch (you'll set a
+  new passphrase and enter your Amarel password once more). This is the mode the
+  Phase 0.1 "fresh start" offer uses.
+
+Substitute the real NetID for `<NetID>`. Because the reset logic is long, stage
+it to `~/.cache/amarel-vscode/reset.sh` via `[EXEC]` first (same width-budget
+rule as Phase 3.1), with `<NetID>` substituted:
 
 [EXEC]
 ```bash
@@ -1659,6 +1695,7 @@ mkdir -p ~/.cache/amarel-vscode
 cat > ~/.cache/amarel-vscode/reset.sh <<'EOF'
 #!/usr/bin/env bash
 set -u
+MODE="${1:-config}"   # "config" (default) or "full" (also deletes the key pair)
 # 1) Remove the Amarel ssh-add block from ~/.zshrc (marker + the line after it)
 [ -f ~/.zshrc ] && sed -i.bak '/# Amarel HPC — re-load SSH key from Keychain/,+1d' ~/.zshrc && echo "✓ ~/.zshrc cleaned"
 # 2) Remove ONLY the skill-authored Host amarel.rutgers.edu block from ~/.ssh/config
@@ -1676,20 +1713,39 @@ if [ -f ~/.ssh/config ]; then
 fi
 # 3) Remove all amarel.rutgers.edu lines (any algorithm) from known_hosts
 [ -f ~/.ssh/known_hosts ] && sed -i.bak '/^amarel\.rutgers\.edu /d' ~/.ssh/known_hosts && echo "✓ known_hosts: amarel entries removed"
-# 4) Dedupe authorized_keys on Amarel (best-effort; skipped if key auth not set up)
-if ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys' 2>/dev/null; then
-  echo "✓ Amarel authorized_keys deduped"
+if [ "$MODE" = "full" ]; then
+  # 4) FULL only: remove the skill's key from Amarel authorized_keys (best-effort,
+  #    needs working key auth) — runs while the current key still authenticates
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu 'sed -i.bak "/amarel-vscode$/d" ~/.ssh/authorized_keys' 2>/dev/null; then
+    echo "✓ Amarel: skill key removed from authorized_keys"
+  else
+    echo "• Skipped Amarel key removal (key auth not active — Phase 3 re-installs)"
+  fi
+  # 5) FULL only: delete the local Amarel key pair so Phase 1.2 re-runs
+  rm -f ~/.ssh/id_ed25519_amarel ~/.ssh/id_ed25519_amarel.pub && echo "✓ local Amarel key pair deleted"
 else
-  echo "• Skipped Amarel dedupe (key auth not set up yet — that's fine)"
+  # 4) CONFIG: dedupe authorized_keys on Amarel (best-effort; skipped if key auth not set up)
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys' 2>/dev/null; then
+    echo "✓ Amarel authorized_keys deduped"
+  else
+    echo "• Skipped Amarel dedupe (key auth not set up yet — that's fine)"
+  fi
 fi
-echo "Reset complete. Re-run the skill from Phase 0."
+echo "Reset ($MODE) complete. Re-run the skill from Phase 0."
 EOF
 ```
 
-Then hand the user the short launcher:
+Then hand the user the short launcher. For the Phase 0.1 "fresh start" offer use
+the `full` form; for a config-only repair omit the argument:
 
 > **🔒 YOUR TURN — macOS / Linux:**
 >
+> Full reset (re-keys — what "fresh start" uses):
+> [TTY]
+> ```bash
+> bash ~/.cache/amarel-vscode/reset.sh full
+> ```
+> Config-only reset (keeps your key pair):
 > [TTY]
 > ```bash
 > bash ~/.cache/amarel-vscode/reset.sh
@@ -1703,6 +1759,7 @@ step):
 ```powershell
 $dir = "$env:LOCALAPPDATA\amarel-vscode"; New-Item -ItemType Directory -Force -Path $dir | Out-Null
 @'
+param([string]$Mode = 'config')   # 'config' (default) or 'full' (also deletes the key pair)
 Set-StrictMode -Version Latest
 # 1) Remove ONLY the skill-authored Host amarel.rutgers.edu block from $HOME\.ssh\config
 $config = "$HOME\.ssh\config"
@@ -1730,21 +1787,32 @@ if (Test-Path $knownHosts) {
   Set-Content -Path $knownHosts -Value $filtered -Encoding UTF8
   "✓ known_hosts: amarel entries removed"
 }
-# 3) Dedupe authorized_keys on Amarel (best-effort; skipped if key auth not set up)
-& ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys" 2>$null
-if ($LASTEXITCODE -eq 0) {
-  "✓ Amarel authorized_keys deduped"
+if ($Mode -eq 'full') {
+  # 3) FULL only: remove the skill's key from Amarel authorized_keys (best-effort)
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sed -i.bak '/amarel-vscode`$/d' ~/.ssh/authorized_keys" 2>$null
+  if ($LASTEXITCODE -eq 0) { "✓ Amarel: skill key removed from authorized_keys" } else { "• Skipped Amarel key removal (key auth not active — Phase 3 re-installs)" }
+  # 4) FULL only: delete the local Amarel key pair so Phase 1.2 re-runs
+  Remove-Item -Force "$HOME\.ssh\id_ed25519_amarel","$HOME\.ssh\id_ed25519_amarel.pub" -ErrorAction SilentlyContinue
+  "✓ local Amarel key pair deleted"
 } else {
-  "• Skipped Amarel dedupe (key auth not set up yet — that's fine)"
+  # 3) CONFIG: dedupe authorized_keys on Amarel (best-effort; skipped if key auth not set up)
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys" 2>$null
+  if ($LASTEXITCODE -eq 0) { "✓ Amarel authorized_keys deduped" } else { "• Skipped Amarel dedupe (key auth not set up yet — that's fine)" }
 }
-"Reset complete. Re-run the skill from Phase 0."
+"Reset ($Mode) complete. Re-run the skill from Phase 0."
 '@ | Set-Content -Path "$dir\reset.ps1" -Encoding UTF8
 ```
 
-Then hand the user:
+Then hand the user (use the `full` form for the Phase 0.1 "fresh start" offer):
 
 > **🔒 YOUR TURN — Windows:**
 >
+> Full reset (re-keys — what "fresh start" uses):
+> [TTY]
+> ```powershell
+> pwsh -ep Bypass -File "$env:LOCALAPPDATA\amarel-vscode\reset.ps1" full
+> ```
+> Config-only reset (keeps your key pair):
 > [TTY]
 > ```powershell
 > pwsh -ep Bypass -File "$env:LOCALAPPDATA\amarel-vscode\reset.ps1"
