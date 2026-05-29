@@ -1,0 +1,16 @@
+{
+  "name": "amarel-vscode",
+  "version": "1.0.0",
+  "description": "Sets up VS Code Remote-SSH against the Rutgers Amarel HPC cluster.",
+  "author": {
+    "name": "OARC / Community"
+  },
+  "license": "MIT",
+  "keywords": [
+    "rutgers",
+    "amarel",
+    "vscode",
+    "remote-ssh",
+    "hpc"
+  ]
+}

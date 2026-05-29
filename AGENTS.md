@@ -9,7 +9,7 @@ This file is read automatically by:
 
 For framework-specific entrypoints that ultimately defer to this file, see:
 
-- `SKILL.md` — Claude Code (with YAML frontmatter for slash-command discovery)
+- `skills/amarel-vscode-setup/SKILL.md` — Claude Code (with YAML frontmatter for slash-command discovery)
 - `GEMINI.md` — Google Gemini CLI / Gemini Code Assist
 
 If you're using a **bare LLM** (ChatGPT web, Claude.ai, a local Ollama model, etc.)
