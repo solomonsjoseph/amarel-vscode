@@ -81,6 +81,24 @@ way). Source being "one line" does NOT prevent this — line *length* vs termina
   Launch via the interpreter (`bash`/`pwsh -File`), never `./file`. Remove the
   staged file in the next `[EXEC]` verify. Today only Phase 3.1 exceeds the budget.
 
+**LLM operator rule — isolate the copy-paste payload.** The user must see at a
+glance exactly what to copy, and copy *only* that. Whenever you hand over a
+command to run or a value to type:
+- Put it in its **own standalone fenced code block** — on its own line, nothing
+  else inside the fence (no instructions, no comments, no success marker) and
+  **no leading `>` blockquote prefix on the fence**. The reference pattern is the
+  Phase 1.2 hand-off: the `> **🔒 YOUR TURN:** …` instruction is a blockquote,
+  then the command sits in a separate fence *outside* the quote. Do **not** nest
+  the fence inside the `>` quote — in a terminal that renders the command flush
+  against the instruction prose and the user copies both.
+- Keep every instruction ("run this", "type your passphrase when prompted",
+  "paste the last 5 lines back") as prose **outside** the fence.
+- Never embed a runnable command or paste-value inline in a sentence. Inline
+  backticks are for *referring* to a command, not handing one over — if it's
+  meant to be copied, it gets its own fence.
+- One payload per fence. Two commands → two fences with a line of prose between,
+  so the user can never select both as one blob.
+
 If the user says "just run the script for me," point them at the one-shot
 fallback in the **Power-user path** section near the end of this file.
 
@@ -489,19 +507,22 @@ Now try logging into the machine, with:
 
 That command disables public-key auth — it would test *password* login, not the key you just installed. Disregard it. Use the command below instead.
 
-> **🔒 YOUR TURN:** Run the login command and check that you get an Amarel shell prompt:
->
-> **macOS/Linux:**
-> [TTY]
-> ```bash
-> ssh -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu
-> ```
-> **Windows PowerShell:**
-> [TTY]
-> ```powershell
-> ssh -i "$HOME\.ssh\id_ed25519_amarel" "<NetID>@amarel.rutgers.edu"
-> ```
->
+> **🔒 YOUR TURN:** Run the login command for your OS and check that you get an Amarel shell prompt.
+
+**macOS/Linux — copy this:**
+
+[TTY]
+```bash
+ssh -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu
+```
+
+**Windows PowerShell — copy this:**
+
+[TTY]
+```powershell
+ssh -i "$HOME\.ssh\id_ed25519_amarel" "<NetID>@amarel.rutgers.edu"
+```
+
 > SSH will prompt for your **key passphrase** (the one you set in Phase 1.2 — not your Amarel password). Enter it and check the result:
 >
 > - **Success:** you see an Amarel shell prompt like `[<NetID>@amarel1 ~]$`. Type `exit` and let me know.
@@ -1384,21 +1405,27 @@ ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'head -30 ~/.bashrc'
 If the heredoc append didn't land cleanly (as happened in the canonical manual
 run), give the user this manual fallback:
 
-> **🔒 YOUR TURN:** SSH into Amarel and open `~/.bashrc` in a text editor:
->
-> [TTY]
-> ```bash
-> ssh <NetID>@amarel.rutgers.edu
-> nano ~/.bashrc
-> ```
->
-> Scroll to the very end and add these two lines:
->
-> ```
-> # VS Code Server custom glibc workaround
-> [ -f "$HOME/.vscode-server/sysroot.sh" ] && source "$HOME/.vscode-server/sysroot.sh"
-> ```
->
+> **🔒 YOUR TURN:** SSH into Amarel — copy this:
+
+[TTY]
+```bash
+ssh <NetID>@amarel.rutgers.edu
+```
+
+> Once you have the Amarel shell prompt, open `~/.bashrc` in an editor — copy this:
+
+[TTY]
+```bash
+nano ~/.bashrc
+```
+
+> Scroll to the very end and add these two lines (copy the block below):
+
+```
+# VS Code Server custom glibc workaround
+[ -f "$HOME/.vscode-server/sysroot.sh" ] && source "$HOME/.vscode-server/sysroot.sh"
+```
+
 > Save and exit: nano → Ctrl+O, Enter, Ctrl+X. Or vim → Esc, `:wq`, Enter.
 
 Then re-run 8.2 to confirm.
@@ -1619,10 +1646,18 @@ already open (otherwise no action needed).
 > 1. Open VS Code.
 > 2. `Cmd+Shift+P` (Mac) / `Ctrl+Shift+P` (Win/Linux).
 > 3. Type and run: **Remote-SSH: Connect to Host**.
-> 4. Pick `<NetID>@amarel.rutgers.edu` (or type it).
+> 4. From the list, pick the host **`amarel.rutgers.edu`**. The list shows host
+>    *aliases* from your SSH config, so this is just `amarel.rutgers.edu` — your
+>    NetID is already baked into the config; you do **not** type `NetID@host`.
 > 5. First time only: click **Allow** on the "OS unsupported" warning.
 > 6. Open View → Output, dropdown → Remote-SSH. Watch for `Server started`.
 > 7. Bottom-left status bar shows **SSH: amarel.rutgers.edu** (green).
+>
+> ⚠️ **Pick the right entry.** The dropdown may also list a separate
+> **`rutgers.edu`** entry (a different host that this skill did **not** create).
+> **Do not click `rutgers.edu`** — it will not connect to Amarel. Always choose
+> **`amarel.rutgers.edu`**. (That stray `rutgers.edu` entry is harmless for now;
+> cleaning it out of your SSH config is a separate fix we'll do later.)
 
 **Common failures (linked recovery branches; none run on a clean first install):**
 
@@ -1752,18 +1787,19 @@ EOF
 Then hand the user the short launcher. For the Phase 0.1 "fresh start" offer use
 the `full` form; for a config-only repair omit the argument:
 
-> **🔒 YOUR TURN — macOS / Linux:**
->
-> Full reset (re-keys — what "fresh start" uses):
-> [TTY]
-> ```bash
-> bash ~/.cache/amarel-vscode/reset.sh full
-> ```
-> Config-only reset (keeps your key pair):
-> [TTY]
-> ```bash
-> bash ~/.cache/amarel-vscode/reset.sh
-> ```
+> **🔒 YOUR TURN — macOS / Linux.** Full reset (re-keys — what "fresh start" uses) — copy this:
+
+[TTY]
+```bash
+bash ~/.cache/amarel-vscode/reset.sh full
+```
+
+Config-only reset (keeps your key pair) — copy this instead:
+
+[TTY]
+```bash
+bash ~/.cache/amarel-vscode/reset.sh
+```
 
 **Windows PowerShell:** stage an equivalent `reset.ps1` to
 `$env:LOCALAPPDATA\amarel-vscode\reset.ps1` (skip the macOS-only `~/.zshrc`
@@ -1821,18 +1857,19 @@ if ($Mode -eq 'full') {
 
 Then hand the user (use the `full` form for the Phase 0.1 "fresh start" offer):
 
-> **🔒 YOUR TURN — Windows:**
->
-> Full reset (re-keys — what "fresh start" uses):
-> [TTY]
-> ```powershell
-> pwsh -ep Bypass -File "$env:LOCALAPPDATA\amarel-vscode\reset.ps1" full
-> ```
-> Config-only reset (keeps your key pair):
-> [TTY]
-> ```powershell
-> pwsh -ep Bypass -File "$env:LOCALAPPDATA\amarel-vscode\reset.ps1"
-> ```
+> **🔒 YOUR TURN — Windows.** Full reset (re-keys — what "fresh start" uses) — copy this:
+
+[TTY]
+```powershell
+pwsh -ep Bypass -File "$env:LOCALAPPDATA\amarel-vscode\reset.ps1" full
+```
+
+Config-only reset (keeps your key pair) — copy this instead:
+
+[TTY]
+```powershell
+pwsh -ep Bypass -File "$env:LOCALAPPDATA\amarel-vscode\reset.ps1"
+```
 
 After the reset, start again at Phase 0.
 
