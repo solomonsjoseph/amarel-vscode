@@ -492,15 +492,6 @@ pwsh -ep Bypass -File "$env:LOCALAPPDATA\amarel-vscode\step-3.1.ps1"
 
 ### 3.1.1 — Verify login (user step)
 
-**Ignore `ssh-copy-id`'s printed suggestion.** It outputs a command like:
-
-```
-Now try logging into the machine, with:
-  "ssh -i … -o 'PreferredAuthentications=password' -o 'PubkeyAuthentication=no' …"
-```
-
-That command disables public-key auth — it would test *password* login, not the key you just installed. Disregard it. Use the command below instead.
-
 > **🔒 YOUR TURN:** Run the login command for your OS and check that you get an Amarel shell prompt.
 
 **macOS/Linux — copy this:**
