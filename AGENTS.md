@@ -550,26 +550,42 @@ On reboot, you may need to re-enter once unless you configure gnome-keyring or
 KWallet for persistent autostart. See your distro's documentation for that
 one-time configuration. The skill sets up everything else automatically.
 
-**Windows PowerShell — start agent service, then add key:**
+**Windows PowerShell — start the agent service, then add the key (user TTY step).**
 
-Start the agent service first (run yourself; no prompt):
+The OpenSSH agent service must be running before `ssh-add`, and to keep SSH
+passwordless across reboots the service should be set to auto-start.
+Configuring or starting a Windows service needs an **Administrator** PowerShell
+(right-click PowerShell → "Run as administrator"). This is advice, not a hard
+rule — **you** choose whether to make the persistent change. Tell the user the
+elevation requirement up front so they decide:
 
-[EXEC]
+- **Recommended — auto-start on every boot** (the Windows equivalent of the
+  macOS Keychain auto-load; keeps SSH passwordless after reboots). In an
+  **Administrator** PowerShell:
+  [TTY]
+  ```powershell
+  Get-Service ssh-agent | Set-Service -StartupType Automatic
+  ```
+- **Or skip that line** if you'd rather not make a persistent change — you'll
+  just re-start the service yourself after each reboot.
+
+Then start the service now and add your key (still an Administrator PowerShell):
+
+[TTY]
 ```powershell
-Get-Service ssh-agent | Set-Service -StartupType Automatic
 Start-Service ssh-agent
 ```
-
-Then hand the user the short passphrase prompt:
 
 [TTY]
 ```powershell
 ssh-add "$HOME\.ssh\id_ed25519_amarel"
 ```
 
-> **🔒 YOUR TURN:** `ssh-add` will prompt for your key passphrase (the one
-> from Phase 1.2). After this, the OS keychain stores it permanently (macOS /
-> Windows) or for this session (Linux). **I cannot see what you type.**
+> **🔒 YOUR TURN:** `ssh-add` will prompt for your key passphrase (from Phase
+> 1.2). After this the keychain stores it (auto-start = across reboots; manual
+> = this login session). **I cannot see what you type.** If `Set-Service` /
+> `Start-Service` reports "Access is denied," your PowerShell isn't elevated —
+> reopen it as Administrator and re-run.
 
 **Wait for user "done".**
 
