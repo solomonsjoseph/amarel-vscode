@@ -32,7 +32,7 @@ point VS Code at it.
 
 > **Execution contract:**
 > 1. This skill executes `[EXEC]` steps autonomously via its Bash tool; it never asks the user to run them.
-> 2. All `[EXEC]` steps are noninteractive: SSH/SCP calls use `-o BatchMode=yes`; no interactive prompts are expected. If a credential prompt appears during an `[EXEC]` step, treat it as a failure and escalate to the user — do not wait.
+> 2. All `[EXEC]` steps are noninteractive: SSH/SCP calls use `-o BatchMode=yes`; no interactive prompts are expected. **Key-auth denial scope (Phases 1–5):** before the key is loaded into the agent (Phase 4.1), a `BatchMode` probe to Amarel returns `Permission denied (publickey,…)` *by construction* — this is an **expected routing signal to proceed with setup, never a failure**. Treat an auth failure as a hard failure to escalate only (a) on any `[EXEC]` step in Phases 6–10, or (b) in Phases 1–5 if the denial persists **after** Phase 4.2 confirms the key is loaded. Never re-run a `[TTY]` password/passphrase step (e.g. Phase 3.1 `ssh-copy-id`) in response to an expected pre-load denial. Any *non-auth* error (network, missing tool, unexpected output) is always surfaced.
 > 3. Key state discovered during execution (`LOCAL_OS`, `NetID`, `REPO_ROOT`, `USE_TARBALL`) is recorded at the phase that first establishes it and reused in all subsequent phases without re-deriving.
 > 4. **Host lock:** The only target is `amarel.rutgers.edu`. Do not substitute any other hostname — not `amarel2.rutgers.edu`, not any other `*.rutgers.edu` host. Every `<NetID>@amarel.rutgers.edu` in this skill is a literal target, not a template.
 
@@ -103,10 +103,10 @@ The complete human touch-point list — everything not on this list is `[EXEC]`:
 | 2 | 3.1 | `ssh-copy-id -i … <NetID>@amarel.rutgers.edu` | **⚠ LAST AMAREL PASSWORD EVER** — password on TTY | All |
 | 3 | 3.1.1 | `ssh -i ~/.ssh/id_ed25519_amarel <NetID>@amarel` | Key passphrase on TTY; confirms key installed | All |
 | 4 | 4.1 | `ssh-add --apple-use-keychain …` / `ssh-add …` | Passphrase to agent on TTY | All |
-| 5 | 4.4 | `tee -a ~/.zshrc <<'EOF' …` | macOS Sequoia fix — single-line paste | **macOS only** |
-| 6 | 10 | VS Code GUI — click Allow, watch status bar | No Bash equivalent | All |
+| 5 | 10 | VS Code GUI — click Allow, watch status bar | No Bash equivalent | All |
 
-**TTY budget:** macOS = 6 · Linux = 5 · Windows = 5
+**TTY budget:** macOS = 5 · Linux = 5 · Windows = 5 (the Phase 4.4 `~/.zshrc`
+append is `[EXEC]`, not a hand-off — see Phase 4.4).
 
 **Linux keychain note:** The Linux per-session guarantee means zero prompts
 within a single login session. A reboot-spanning guarantee requires persistent
@@ -240,15 +240,23 @@ If `EXISTS`, skip to Phase 2.
 
 [TTY]
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_amarel -C "amarel-vscode-$(whoami)@$(hostname)"
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_amarel -C amarel-vscode
 ```
 
 **Windows PowerShell:**
 
 [TTY]
 ```powershell
-ssh-keygen -t ed25519 -f "$HOME\.ssh\id_ed25519_amarel" -C "amarel-vscode-$env:USERNAME@$env:COMPUTERNAME"
+ssh-keygen -t ed25519 -f "$HOME\.ssh\id_ed25519_amarel" -C amarel-vscode
 ```
+
+**Operator note — do not "improve" the `-C` comment.** It is the fixed literal
+`amarel-vscode` (no `$(whoami)`/`$(hostname)`/`$env:` substitution, no quotes).
+Two reasons: (1) a quoted comment with a `$(…)` expansion wraps on paste and
+orphans the `-C` flag (`ssh-keygen: option requires an argument -- C` — the live
+run hit exactly this); (2) Phases 1.0, 4.0, and 4.2 identify the key by
+`grep amarel-vscode` against `ssh-add -l` output, so the comment must contain
+that exact token.
 
 **Wait for user "done", then verify the pub key exists yourself:**
 
@@ -384,9 +392,7 @@ mkdir -p ~/.ssh && chmod 700 ~/.ssh
 touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
 grep -qxF "$KEY" ~/.ssh/authorized_keys || printf '%s\n' "$KEY" >> ~/.ssh/authorized_keys
 '@
-Get-Content -Raw "$HOME\.ssh\id_ed25519_amarel.pub" | & ssh -tt `
-    -o PreferredAuthentications=password -o PubkeyAuthentication=no `
-    "<NetID>@amarel.rutgers.edu" $remoteCmd
+Get-Content -Raw "$HOME\.ssh\id_ed25519_amarel.pub" | & ssh -tt -o PreferredAuthentications=password -o PubkeyAuthentication=no "<NetID>@amarel.rutgers.edu" $remoteCmd
 ```
 
 > **🔒 YOUR TURN:** Amarel's password prompt will appear in the terminal.
@@ -442,13 +448,13 @@ Don't treat it as a failure.
 
 ### 3.2 — Verify key auth (run yourself)
 
-[VERIFY]
-Command:  BatchMode ssh echo-ok
-Pass:     "✓ key auth works" (exit code 0)
-Warn:     "Permission denied" on first run before Phase 4.1 is expected — not a failure
-Fail:     "Permission denied" persisting after Phase 4.2 confirms key is in agent
-On fail:  inspect authorized_keys on Amarel; re-run Phase 3.1 if key not present
-Advance:  Phase 4
+[EXEC]
+Run this probe yourself, then **always advance to Phase 4**. On a fresh run it
+returns `Permission denied (publickey,…)` — that is **expected**, not a failure
+(the key isn't in the agent until Phase 4.1; see the note below). Do **not**
+re-run Phase 3.1 and do **not** ask for the Amarel password again. The canonical
+pass/fail check is Phase 5, after the agent holds the key.
+
 ```bash
 ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu 'echo ok' && echo "✓ key auth works"
 ```
@@ -462,7 +468,7 @@ canonical end-to-end verification is **Phase 5** (after the agent holds the key)
 **Only treat this as a real problem** if `Permission denied` persists **after**
 Phase 4.2 shows the key loaded in the agent. In that case the key install didn't
 take: log in interactively (`ssh <NetID>@amarel.rutgers.edu`) and check that
-`~/.ssh/authorized_keys` on Amarel has a line ending in `amarel-vscode-…`, with
+`~/.ssh/authorized_keys` on Amarel has a line ending in `amarel-vscode`, with
 permissions `600 ~/.ssh/authorized_keys` and `700 ~/.ssh`.
 
 **Wait for confirmation, then advance.**
@@ -503,7 +509,7 @@ ssh-add --apple-use-keychain ~/.ssh/id_ed25519_amarel
 ```
 
 **macOS keychain-label note (for a clean future reverse-out):** `ssh-add` prints
-a line like `Identity added: …/id_ed25519_amarel (amarel-vscode-…)`. You may
+a line like `Identity added: …/id_ed25519_amarel (amarel-vscode)`. You may
 record that label from the visible stdout the user pastes back. **Do NOT** run
 `security find-generic-password` or `security dump-keychain` to discover it —
 those are on the security deny-list. The label is already in plain `ssh-add`
@@ -689,26 +695,29 @@ this fix, the first `ssh` after a reboot prompts for the passphrase again.
 grep -q 'id_ed25519_amarel' ~/.zshrc 2>/dev/null && echo "PRESENT — skip" || echo "ABSENT — add it"
 ```
 
-**If ABSENT:**
+**If ABSENT — run yourself.** This is a pure file append with no prompt — the
+same pattern as the Phase 4.3 `~/.ssh/config` append — so the LLM runs it via
+Bash. It is **not** a TTY hand-off (the appended `ssh-add` reads the passphrase
+silently from the Keychain; nothing prompts now):
 
-> **🔒 YOUR TURN:** Run this single command — it appends the fix without opening an editor:
->
-> [TTY]
-> ```bash
-> tee -a ~/.zshrc <<'EOF'
->
-> # Amarel HPC — re-load SSH key from Keychain on each shell (macOS Sequoia fix)
-> ssh-add --apple-use-keychain ~/.ssh/id_ed25519_amarel 2>/dev/null
-> EOF
-> ```
->
-> The `2>/dev/null` suppresses "identity already added" when the key is already loaded. The passphrase is read silently from the macOS Keychain — no prompt.
+[EXEC]
+```bash
+cat >> ~/.zshrc <<'EOF'
+
+# Amarel HPC — re-load SSH key from Keychain on each shell (macOS Sequoia fix)
+ssh-add --apple-use-keychain ~/.ssh/id_ed25519_amarel 2>/dev/null
+EOF
+```
+
+The appended `ssh-add` runs at each future shell startup and reads the
+passphrase silently from the macOS Keychain. The `2>/dev/null` suppresses
+"identity already added" when the key is already loaded.
 
 **Verify (run yourself after user "done"):**
 
 [EXEC]
 ```bash
-grep -q 'id_ed25519_amarel' ~/.zshrc && echo "✓ ~/.zshrc updated" || echo "✗ line missing — repeat YOUR TURN above"
+grep -q 'id_ed25519_amarel' ~/.zshrc && echo "✓ ~/.zshrc updated" || echo "✗ line missing — re-run the append above"
 ```
 
 *Linux:* skip — the agent is session-scoped and this pattern doesn't help.  

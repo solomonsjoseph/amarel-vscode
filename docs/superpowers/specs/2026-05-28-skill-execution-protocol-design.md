@@ -83,22 +83,23 @@ Advance:  Phase N.N
 
 Trivial checks (file exists, exit code 0) may use a one-line inline note instead of the full format.
 
-### Change 3 — TTY hand-offs: 5 on Linux/Windows, 6 on macOS
+### Change 3 — TTY hand-offs: 5 on every OS
 
 The complete human touch-point list. Everything not on this list is `[EXEC]`:
 
 | # | Phase | Command / Action | Why human | OS |
 |---|---|---|---|---|
-| 1 | 1.2 | `ssh-keygen -t ed25519 …` | Passphrase prompt on TTY — LLM cannot see | All |
+| 1 | 1.2 | `ssh-keygen -t ed25519 … -C amarel-vscode` | Passphrase prompt on TTY — LLM cannot see | All |
 | 2 | 3.1 | `ssh-copy-id -i … netid@amarel.rutgers.edu` | **⚠ LAST AMAREL PASSWORD EVER** — password on TTY | All |
 | 3 | 3.1.1 | `ssh -i ~/.ssh/id_ed25519_amarel netid@amarel` | Key passphrase on TTY; confirms key installed | All |
 | 4 | 4.1 | `ssh-add --apple-use-keychain …` / `ssh-add …` | Passphrase to agent on TTY | All |
-| 5 | 4.4 | `tee -a ~/.zshrc <<'EOF' …` | macOS Sequoia fix — single-line paste | **macOS only** |
-| 6 | 10 | VS Code GUI — click Allow, watch status bar | No Bash equivalent | All |
+| 5 | 10 | VS Code GUI — click Allow, watch status bar | No Bash equivalent | All |
 
-**TTY budget:** macOS = 6 · Linux = 5 · Windows = 5
+**TTY budget:** macOS = 5 · Linux = 5 · Windows = 5
 
-All other steps (preflight probes, known_hosts, BatchMode ssh, scp, tarball download + checksum, remote extract, `.bashrc` append, Phase 9 merge, all verification gates) are `[EXEC]`.
+All other steps (preflight probes, known_hosts, BatchMode ssh, scp, tarball download + checksum, remote extract, `.bashrc` append, **the Phase 4.4 `~/.zshrc` append**, Phase 9 merge, all verification gates) are `[EXEC]`.
+
+**TTY commands must be paste-trivial.** Every `[TTY]` command is a single physical line with no backslash/backtick continuation, no heredoc, and no `$(…)`/`$env:` substitution inside quotes — those wrap on paste and corrupt the command (the live run hit `ssh-keygen: option requires an argument -- C` this way). Phase 1.2's `-C` is the fixed literal `amarel-vscode` (also the token Phases 1.0/4.0/4.2 grep in `ssh-add -l`). Phase 4.4 is `[EXEC]`, not `[TTY]`: it is a silent file append with no prompt, so the LLM runs the heredoc via its Bash tool (where it executes atomically, immune to paste mangling — the same heredoc failed in the manual run when the *user* pasted it).
 
 ### Change 4 — Phase 9 marked `[MANDATORY]`
 
@@ -151,3 +152,50 @@ No other files change.
 | Execution contract missing noninteractive + credential-prompt rules | Rules 2 and 3 added to contract |
 | State persistence across phases not specified | Rule 3 added to execution contract |
 | Phases 1–5 not distinguished from manual-run phases | "Background" section added |
+
+## Defects Fixed in v3 (paste-fragility pass)
+
+Reported symptom: the skill broke during the password/key-setup phases on first
+run, but ran fine once the key files already existed. Root cause was paste
+fragility in `[TTY]` hand-offs, not content.
+
+| Defect | Fix |
+|---|---|
+| Phase 1.2 `-C "amarel-vscode-$(whoami)@$(hostname)"` wrapped on paste, orphaning `-C` (`option requires an argument -- C`) | `-C` is now the fixed literal `amarel-vscode` — no substitution, no quotes; still carries the token Phases 1.0/4.0/4.2 grep in `ssh-add -l` |
+| Phase 4.4 was a multi-line `tee … <<'EOF'` heredoc tagged `[TTY]` — violated the "no multi-line TTY" rule and hung at `heredoc>` on paste | Retagged `[EXEC]`; the LLM runs the append (`cat >> ~/.zshrc <<'EOF'`) via its Bash tool, atomically — same fix the manual run reached when its pasted `~/.bashrc` heredoc failed. macOS TTY budget 6 → 5 |
+| Phase 3.1 Windows `ssh` invocation used backtick line-continuation across 3 lines in a `[TTY]` block | Collapsed to a single physical line, matching the proven `scripts/setup.ps1:220` one-liner |
+| TTY commands had no explicit paste-safety constraint | Added the "TTY commands must be paste-trivial" rule to Change 3 |
+
+## Defects Fixed in v4 (the Phases 1–5 break — control semantics, not commands)
+
+Reported symptom: on this branch the **passwordless-login setup (Phases 1–5)
+broke / looped**, while everything after login worked; the user confirmed
+Phases 1–5 worked on `main` before this branch. Git archaeology pinned the
+drift to commit `01cbea5` (this redesign). A line-diff proved the Phase 1–5
+**commands are byte-identical to `main`** — the regression was 100% in the
+failure-classification scaffolding this spec introduced. Diagnosis was
+cross-checked by an independent multi-agent stress-test and a Codex consult;
+both converged.
+
+**Root cause:** the key-auth dance is chicken-and-egg — between key install
+(3.1) and agent load (4.1), every `BatchMode` probe returns `Permission denied
+(publickey,…)` *by construction*. The redesign criminalized that expected
+state two ways: (1) the **Phase 3.2 `[VERIFY]` gate** declared `Pass: exit 0`
+(false on every fresh run) and `On fail: … re-run Phase 3.1`, which bounces the
+user back into the "LAST AMAREL PASSWORD EVER" step — breaking the one-password
+mission and looping; (2) **execution-contract rule 2** ("credential prompt =
+failure, escalate"), being top-of-file/highest-authority, overrode the inline
+"this is expected" waivers. `main` worked because its flexible prose let the
+agent ride through the expected denial and deferred the only hard check to
+Phase 5 (after the agent holds the key).
+
+| Defect | Fix |
+|---|---|
+| Phase 3.2 `[VERIFY]` gate is undecidable on a fresh run (Pass=exit-0 impossible; Warn vs Fail key off the identical "Permission denied" string) and its `On fail` re-runs Phase 3.1 → password loop | Deleted the gate; replaced with `[EXEC]` + "expected denial, always advance to Phase 4, never re-run 3.1 / re-ask the password; Phase 5 is the canonical check" |
+| Execution-contract rule 2 escalated the expected pre-agent-load `BatchMode` denial | Re-scoped rule 2: in Phases 1–5 a pre-load `publickey` denial is an expected routing signal (proceed); escalate only in Phases 6–10, or in Phases 1–5 if it persists **after** Phase 4.2. Non-auth errors are always surfaced |
+
+**Design rule going forward:** a `[VERIFY]` gate is only valid where its
+success is *possible at that point in the flow*. Never place a hard pass/fail
+gate on a probe whose expected result, given the phase ordering, is failure —
+use prose/`[EXEC]` with an explicit "expected, proceed" routing instead. For
+the key dance, the first and only hard passwordless-SSH gate is **Phase 5**.
