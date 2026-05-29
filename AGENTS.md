@@ -13,7 +13,7 @@ For framework-specific entrypoints that ultimately defer to this file, see:
 - `GEMINI.md` — Google Gemini CLI / Gemini Code Assist
 
 If you're using a **bare LLM** (ChatGPT web, Claude.ai, a local Ollama model, etc.)
-with no project-instruction system, see [`docs/using-other-llms.md`](docs/using-other-llms.md)
+with no project-instruction system, see the **ChatGPT, Claude.ai, or any bare LLM** section in [`README.md`](README.md)
 for a copy-paste prompt.
 
 ---

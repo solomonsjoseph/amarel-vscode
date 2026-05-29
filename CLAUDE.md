@@ -17,7 +17,8 @@ If you edit one runbook file, keep the others in sync. The mirrors are:
 - `skills/amarel-vscode-setup/SKILL.md` — Claude Code (has YAML frontmatter for slash-command discovery)
 - `AGENTS.md` — canonical / Codex / Cursor / Cline (per the [agents.md convention](https://agents.md))
 - `GEMINI.md` — Gemini CLI (thin pointer to AGENTS.md)
-- `docs/using-other-llms.md` — bare-LLM copy-paste prompt
+- `README.md` — end-user docs containing the bare-LLM copy-paste prompt
+
 
 ## Commands
 
@@ -57,7 +58,7 @@ A fingerprint mismatch in Phase 2 is a hard stop — possible MITM. Do not work 
 
 ## Conventions worth knowing
 
-- The 11-phase numbering (0–10) in `setup.sh` and the runbooks is load-bearing — error messages, the README troubleshooting table, `skills/amarel-vscode-setup/SKILL.md`, `AGENTS.md`, `GEMINI.md`, and `docs/using-other-llms.md` all reference phases by number. Don't renumber; insert new phases with `.5` if absolutely needed.
+- The 11-phase numbering (0–10) in `setup.sh` and the runbooks is load-bearing — error messages, the README troubleshooting table, `skills/amarel-vscode-setup/SKILL.md`, `AGENTS.md`, and `GEMINI.md` all reference phases by number. Don't renumber; insert new phases with `.5` if absolutely needed.
 - Phase 0 owns local OS detection. Do not ask the user whether they are on macOS, Linux, or Windows; infer it from context or the Phase 0 output and branch from there.
 - Scripts must remain idempotent. Re-running after any failure is the supported recovery path; don't introduce state that breaks on re-run.
 - "🔒 YOUR TURN" is the convention for any prompt the user must type into (vs. confirmations or info lines). Preserve the marker if you add new interactive steps.
