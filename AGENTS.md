@@ -1911,24 +1911,10 @@ and the same TTY-based prompts for passwords/passphrases. It does not
 involve you (the LLM) at all. Recommend this path only if the user
 explicitly asks for it.
 
-## Without you (the LLM)
-
-A teammate with no LLM at all can do the whole setup by running:
-
-```bash
-git clone https://github.com/solomonsjoseph/amarel-vscode.git
-cd amarel-vscode
-./scripts/setup.sh        # or pwsh scripts/setup.ps1 on Windows
-```
-
-The scripts are self-narrating. Your job as an agent is to walk the user
-through the same logical phases manually, command by command, so they see
-and consent to each operation. Don't bypass that by running the script for
-them.
-
 ## References
 
 - Repo + issues: <https://github.com/solomonsjoseph/amarel-vscode>
 - Microsoft FAQ (the supported workaround pattern): <https://code.visualstudio.com/docs/remote/faq#_can-i-run-vs-code-server-on-older-linux-distributions>
 - ursetto/vscode-sysroot (upstream of the sysroot tarball): <https://github.com/ursetto/vscode-sysroot>
 - AGENTS.md convention: <https://agents.md>
+
