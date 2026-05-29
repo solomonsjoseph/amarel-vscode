@@ -618,19 +618,28 @@ grep -q 'id_ed25519_amarel' ~/.zshrc 2>/dev/null && echo "PRESENT — skip" || e
 
 **If ABSENT:**
 
-> **🔒 YOUR TURN:** Add these two lines to the end of your `~/.zshrc`:
+> **🔒 YOUR TURN:** Run this single command — it appends the fix without opening an editor:
 >
 > ```bash
+> tee -a ~/.zshrc <<'EOF'
+>
 > # Amarel HPC — re-load SSH key from Keychain on each shell (macOS Sequoia fix)
 > ssh-add --apple-use-keychain ~/.ssh/id_ed25519_amarel 2>/dev/null
+> EOF
 > ```
 >
 > The `2>/dev/null` suppresses "identity already added" when the key is already loaded. The passphrase is read silently from the macOS Keychain — no prompt.
 
+**Verify (run yourself after user "done"):**
+
+```bash
+grep -q 'id_ed25519_amarel' ~/.zshrc && echo "✓ ~/.zshrc updated" || echo "✗ line missing — repeat YOUR TURN above"
+```
+
 *Linux:* skip — the agent is session-scoped and this pattern doesn't help.  
 *Windows:* skip — the ssh-agent service persists across sessions without this workaround.
 
-**Wait for user "done", then advance.**
+**Wait for verification to pass, then advance.**
 
 ---
 
@@ -723,34 +732,37 @@ If found and valid, skip to 6.4.
 
 ### 6.1 — Local search (run yourself)
 
-Search wide **before** any build fallback — the live run jumped to the Docker
-build too fast. Run these cheapest-first; stop at the first that finds a match.
+Search local storage before downloading. On macOS, `mdfind` queries the
+Spotlight index which covers the full filesystem — if it returns nothing,
+proceed directly to 6.2; do not run the slow `find` sweeps. On Linux/Windows,
+run the home-directory sweep instead.
 
-**macOS** (Spotlight index is fastest; `mdfind` is macOS-only):
+**macOS** — Spotlight search (run yourself):
 
 ```bash
 mdfind -name 'vscode-sysroot-x86_64-linux-gnu.tgz' 2>/dev/null
 ```
 
-**macOS/Linux** (home sweep, then a bounded full sweep only if home misses):
+- **1+ matches** → validate with `tar tzf <path> >/dev/null` and use it; skip 6.2.
+- **0 matches** → Spotlight found nothing on this machine; proceed to **6.2**.
+
+**Linux** — home sweep (run yourself; skip on macOS):
 
 ```bash
 find ~ -name 'vscode-sysroot-x86_64-linux-gnu.tgz' 2>/dev/null
-find / -name 'vscode-sysroot-x86_64-linux-gnu.tgz' -not -path '*/Library/*' -not -path '/private/var/*' 2>/dev/null
 ```
 
-**Windows PowerShell:**
+- **1 match** → validate and use it; skip 6.2.
+- **0 matches** → proceed to **6.2**.
+
+**Windows PowerShell** — home sweep (run yourself):
 
 ```powershell
 Get-ChildItem -Path $HOME -Recurse -Filter vscode-sysroot-x86_64-linux-gnu.tgz -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
 ```
 
-- **1 match** → validate with `tar tzf <path> >/dev/null` then use it.
-- **2+ matches** → surface the list to the user and ask which to use.
-- **0 matches after all of the above** → **ask the user** "Do you have a
-  `vscode-sysroot` clone or tarball anywhere I haven't looked (external drive,
-  iCloud Drive, another machine)?" **before** advancing to 6.2/6.3. Do not
-  silently fall through to a 30–60 min build.
+- **1 match** → validate and use it; skip 6.2.
+- **0 matches** → proceed to **6.2**.
 
 ### 6.2 — Download from GitHub Release (run yourself if still missing)
 
