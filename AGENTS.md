@@ -130,27 +130,30 @@ The complete human touch-point list — everything not on this list is `[EXEC]`:
 |---|---|---|---|---|
 | 1 | 1.2 | `ssh-keygen -t ed25519 …` | Passphrase prompt on TTY — LLM cannot see | All |
 | 2 | 3.1 | `bash ~/.cache/amarel-vscode/step-3.1.sh` (staged ssh-copy-id) | **⚠ LAST AMAREL PASSWORD EVER** — password on TTY | All |
-| 3 | 3.1.1 | `ssh -i ~/.ssh/id_ed25519_amarel <NetID>@amarel` | Key passphrase on TTY; confirms key installed | All |
+| 3 | 3.1.1 | `ssh -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu` | Key passphrase on TTY; confirms key installed | All |
 | 4 | 4.1 | `ssh-add --apple-use-keychain …` / `ssh-add …` | Passphrase to agent on TTY | All |
 | 5 | 10 | VS Code GUI — click Allow, watch status bar | No Bash equivalent | All |
 
-**TTY budget:** macOS = 5 · Linux = 5 · Windows = 5 (the Phase 4.4 `~/.zshrc`
-append is `[EXEC]`, not a hand-off — see Phase 4.4).
+**TTY budget:** macOS = 5 · Linux = 5 · Windows = 6 (Phase 4.1 Windows has two
+mandatory steps: `Start-Service` + `ssh-add`. The Phase 4.4 `~/.zshrc` append
+is `[EXEC]`, not a hand-off — see Phase 4.4).
 
 **Linux keychain note:** The Linux per-session guarantee means zero prompts
 within a single login session. A reboot-spanning guarantee requires persistent
 keyring autostart that the skill cannot configure — the skill points the user
 at their distro docs and continues.
 
-### Heads-up: your 4 terminal moments
+### Heads-up: your terminal moments
 
 Tell the user up front (I run everything else myself via Bash). You will switch
-to your terminal exactly **four** times, in this order:
+to your terminal **four** times (macOS/Linux) or **five** times (Windows), in
+this order:
 
 1. **Phase 1.2** — `ssh-keygen`: set a key passphrase (typed twice).
 2. **Phase 3.1** — install your key: your **last Amarel password ever**.
 3. **Phase 3.1.1** — test login: your key passphrase.
 4. **Phase 4.1** — `ssh-add`: your key passphrase, saved to the keychain.
+   *(Windows: also `Start-Service ssh-agent` first — needs admin PowerShell.)*
 
 I hand you each command when it's time and verify the result before advancing —
 so we keep them one at a time rather than all at once. Nothing else needs your
@@ -442,7 +445,8 @@ stage it to a short wrapper first (run yourself):
 mkdir -p ~/.cache/amarel-vscode
 cat > ~/.cache/amarel-vscode/step-3.1.sh <<'EOF'
 #!/usr/bin/env bash
-ssh-copy-id -i ~/.ssh/id_ed25519_amarel.pub -o PreferredAuthentications=password -o PubkeyAuthentication=no <NetID>@amarel.rutgers.edu
+ssh-copy-id -i ~/.ssh/id_ed25519_amarel.pub -o PreferredAuthentications=password -o PubkeyAuthentication=no <NetID>@amarel.rutgers.edu 2>&1 | grep -Ev "^Now try|^and check to make sure"
+exit "${PIPESTATUS[0]}"
 EOF
 ```
 
@@ -1753,7 +1757,7 @@ if [ "$MODE" = "full" ]; then
   #    ~/.bashrc loader block. Runs while the current key still authenticates, BEFORE
   #    the local key pair is deleted below.
   if ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu '
-        sed -i.bak "/amarel-vscode$/d" ~/.ssh/authorized_keys 2>/dev/null
+        sed -i.bak "/amarel-vscode/d" ~/.ssh/authorized_keys 2>/dev/null
         rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz
         [ -f ~/.bashrc ] && sed -i.bak -e "/# VS Code Server custom glibc workaround/d" -e "\#vscode-server/sysroot\.sh#d" ~/.bashrc
       ' 2>/dev/null; then
@@ -1832,7 +1836,7 @@ if ($Mode -eq 'full') {
   # 3) FULL only: remove EVERYTHING this skill deployed on Amarel in one SSH call
   #    (best-effort) — authorized_keys line, extracted sysroot + sysroot.sh, leftover
   #    upload, and the ~/.bashrc loader block. Runs while the current key still works.
-  & ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sed -i.bak '/amarel-vscode`$/d' ~/.ssh/authorized_keys 2>/dev/null; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz; [ -f ~/.bashrc ] && sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc" 2>$null
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sed -i.bak '/amarel-vscode/d' ~/.ssh/authorized_keys 2>/dev/null; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz; [ -f ~/.bashrc ] && sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc" 2>$null
   if ($LASTEXITCODE -eq 0) { "✓ Amarel: skill key, deployed sysroot, and ~/.bashrc loader removed" } else { "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)" }
   # 4) FULL only: delete the local Amarel key pair so Phase 1.2 re-runs
   Remove-Item -Force "$HOME\.ssh\id_ed25519_amarel","$HOME\.ssh\id_ed25519_amarel.pub" -ErrorAction SilentlyContinue
