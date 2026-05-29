@@ -187,7 +187,7 @@ failure on Apple Silicon) and publishes the release automatically.
 
 ### Keeping the runbooks in sync
 
-`SKILL.md` (Claude Code) and `AGENTS.md` (Codex / Cursor / Cline) must stay
+`skills/amarel-vscode-setup/SKILL.md` (Claude Code) and `AGENTS.md` (Codex / Cursor / Cline) must stay
 logically byte-identical in all non-framework-specific sections. `GEMINI.md`
 is a thin pointer — update only if phase numbers change. If you edit one
 runbook, edit all three.
@@ -195,7 +195,7 @@ runbook, edit all three.
 ### Adding a new platform
 
 1. Add `scripts/setup-<platform>.sh` (or `.ps1`).
-2. Update `SKILL.md` and `AGENTS.md` to dispatch on the new platform.
+2. Update `skills/amarel-vscode-setup/SKILL.md` and `AGENTS.md` to dispatch on the new platform.
 3. Update the Prerequisites table in this README.
 
 ### Pinning `ursetto/vscode-sysroot`

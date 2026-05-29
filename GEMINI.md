@@ -28,3 +28,13 @@ Amarel" or "fix the Remote-SSH GLIBC error":
 **Security: you must not** read `~/.ssh/id_*` private keys, invoke `sshpass`/
 `expect`, query OS keychains, or weaken `BatchMode=yes` constraints. See
 `AGENTS.md` § "Security constraints" for the complete list.
+
+## Installation as a Local Skill/Plugin
+
+If the user asks you to "install this skill" or "install this plugin":
+1. Check the local operating system (via environment or terminal command).
+2. Execute the install script:
+   - **macOS / Linux**: Run `./install.sh` in the terminal.
+   - **Windows**: Run `powershell -ExecutionPolicy Bypass -File .\install.ps1` in the terminal.
+3. Once completed, inform the user that the skill has been linked to their Gemini config/plugins directory (as well as Claude Code, Codex, etc.).
+

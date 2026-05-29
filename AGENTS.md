@@ -9,7 +9,7 @@ This file is read automatically by:
 
 For framework-specific entrypoints that ultimately defer to this file, see:
 
-- `SKILL.md` — Claude Code (with YAML frontmatter for slash-command discovery)
+- `skills/amarel-vscode-setup/SKILL.md` — Claude Code (with YAML frontmatter for slash-command discovery)
 - `GEMINI.md` — Google Gemini CLI / Gemini Code Assist
 
 If you're using a **bare LLM** (ChatGPT web, Claude.ai, a local Ollama model, etc.)
@@ -1733,9 +1733,31 @@ cat > ~/.cache/amarel-vscode/reset.sh <<'EOF'
 #!/usr/bin/env bash
 set -u
 MODE="${1:-config}"   # "config" (default) or "full" (also deletes the key pair)
-# 1) Remove the Amarel ssh-add block from ~/.zshrc (marker + the line after it)
+
+# 1) FULL or CONFIG: Amarel-side cleanup/dedupe first, while SSH config and keys are fully intact!
+if [ "$MODE" = "full" ]; then
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu '
+        sed -i.bak "/amarel-vscode/d" ~/.ssh/authorized_keys 2>/dev/null
+        rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz
+        [ -f ~/.bashrc ] && sed -i.bak -e "/# VS Code Server custom glibc workaround/d" -e "\#vscode-server/sysroot\.sh#d" ~/.bashrc
+      ' 2>/dev/null; then
+    echo "✓ Amarel: skill key, deployed sysroot, and ~/.bashrc loader removed"
+  else
+    echo "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)"
+  fi
+else
+  # CONFIG: dedupe authorized_keys on Amarel
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys' 2>/dev/null; then
+    echo "✓ Amarel authorized_keys deduped"
+  else
+    echo "• Skipped Amarel dedupe (key auth not set up yet — that's fine)"
+  fi
+fi
+
+# 2) Remove the Amarel ssh-add block from ~/.zshrc (marker + the line after it)
 [ -f ~/.zshrc ] && sed -i.bak '/# Amarel HPC — re-load SSH key from Keychain/,+1d' ~/.zshrc && echo "✓ ~/.zshrc cleaned"
-# 2) Remove ONLY the skill-authored Host amarel.rutgers.edu block from ~/.ssh/config
+
+# 3) Remove ONLY the skill-authored Host amarel.rutgers.edu block from ~/.ssh/config
 if [ -f ~/.ssh/config ]; then
   cp ~/.ssh/config ~/.ssh/config.bak
   awk '
@@ -1748,32 +1770,24 @@ if [ -f ~/.ssh/config ]; then
     { print }
   ' ~/.ssh/config.bak > ~/.ssh/config && chmod 600 ~/.ssh/config && echo "✓ ~/.ssh/config: amarel block removed (others kept)"
 fi
-# 3) Remove all amarel.rutgers.edu lines (any algorithm) from known_hosts
+
+# 4) Remove all amarel.rutgers.edu lines (any algorithm) from known_hosts
 [ -f ~/.ssh/known_hosts ] && sed -i.bak '/^amarel\.rutgers\.edu /d' ~/.ssh/known_hosts && echo "✓ known_hosts: amarel entries removed"
+
+# 5) Wiping agent keys and local key pair if FULL
 if [ "$MODE" = "full" ]; then
-  # 4) FULL only: remove EVERYTHING this skill deployed on Amarel in one SSH call
-  #    (best-effort, needs working key auth) — the skill's authorized_keys line, the
-  #    extracted ~/.vscode-server/sysroot + sysroot.sh, any leftover upload, and the
-  #    ~/.bashrc loader block. Runs while the current key still authenticates, BEFORE
-  #    the local key pair is deleted below.
-  if ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu '
-        sed -i.bak "/amarel-vscode/d" ~/.ssh/authorized_keys 2>/dev/null
-        rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz
-        [ -f ~/.bashrc ] && sed -i.bak -e "/# VS Code Server custom glibc workaround/d" -e "\#vscode-server/sysroot\.sh#d" ~/.bashrc
-      ' 2>/dev/null; then
-    echo "✓ Amarel: skill key, deployed sysroot, and ~/.bashrc loader removed"
-  else
-    echo "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)"
+  # Remove stale amarel-vscode keys from ssh-agent
+  if ssh-add -l 2>/dev/null | grep -q "amarel-vscode"; then
+    ssh-add -L | grep "amarel-vscode" | while read -r key; do
+      temp_pub=$(mktemp)
+      echo "$key" > "$temp_pub"
+      ssh-add -d "$temp_pub" 2>/dev/null
+      rm -f "$temp_pub"
+    done
+    echo "✓ Stale amarel-vscode keys removed from ssh-agent"
   fi
-  # 5) FULL only: delete the local Amarel key pair so Phase 1.2 re-runs
+  # Delete the local Amarel key pair
   rm -f ~/.ssh/id_ed25519_amarel ~/.ssh/id_ed25519_amarel.pub && echo "✓ local Amarel key pair deleted"
-else
-  # 4) CONFIG: dedupe authorized_keys on Amarel (best-effort; skipped if key auth not set up)
-  if ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys' 2>/dev/null; then
-    echo "✓ Amarel authorized_keys deduped"
-  else
-    echo "• Skipped Amarel dedupe (key auth not set up yet — that's fine)"
-  fi
 fi
 echo "Reset ($MODE) complete. Re-run the skill from Phase 0."
 EOF
@@ -1806,7 +1820,17 @@ $dir = "$env:LOCALAPPDATA\amarel-vscode"; New-Item -ItemType Directory -Force -P
 @'
 param([string]$Mode = 'config')   # 'config' (default) or 'full' (also deletes the key pair)
 Set-StrictMode -Version Latest
-# 1) Remove ONLY the skill-authored Host amarel.rutgers.edu block from $HOME\.ssh\config
+
+# 1) FULL or CONFIG: Amarel-side cleanup/dedupe first, while SSH config and keys are fully intact!
+if ($Mode -eq 'full') {
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sed -i.bak '/amarel-vscode/d' ~/.ssh/authorized_keys 2>/dev/null; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz; [ -f ~/.bashrc ] && sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc" 2>$null
+  if ($LASTEXITCODE -eq 0) { "✓ Amarel: skill key, deployed sysroot, and ~/.bashrc loader removed" } else { "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)" }
+} else {
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys" 2>$null
+  if ($LASTEXITCODE -eq 0) { "✓ Amarel authorized_keys deduped" } else { "• Skipped Amarel dedupe (key auth not set up yet — that's fine)" }
+}
+
+# 2) Remove ONLY the skill-authored Host amarel.rutgers.edu block from $HOME\.ssh\config
 $config = "$HOME\.ssh\config"
 if (Test-Path $config) {
   Copy-Item $config "$config.bak" -Force
@@ -1824,7 +1848,8 @@ if (Test-Path $config) {
   Set-Content -Path $config -Value $out -Encoding UTF8
   "✓ ${config}: amarel block removed (others kept)"
 }
-# 2) Remove all amarel.rutgers.edu lines (any algorithm) from known_hosts
+
+# 3) Remove all amarel.rutgers.edu lines (any algorithm) from known_hosts
 $knownHosts = "$HOME\.ssh\known_hosts"
 if (Test-Path $knownHosts) {
   Copy-Item $knownHosts "$knownHosts.bak" -Force
@@ -1832,19 +1857,22 @@ if (Test-Path $knownHosts) {
   Set-Content -Path $knownHosts -Value $filtered -Encoding UTF8
   "✓ known_hosts: amarel entries removed"
 }
+
+# 4) Wiping agent keys and local key pair if FULL
 if ($Mode -eq 'full') {
-  # 3) FULL only: remove EVERYTHING this skill deployed on Amarel in one SSH call
-  #    (best-effort) — authorized_keys line, extracted sysroot + sysroot.sh, leftover
-  #    upload, and the ~/.bashrc loader block. Runs while the current key still works.
-  & ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sed -i.bak '/amarel-vscode/d' ~/.ssh/authorized_keys 2>/dev/null; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz; [ -f ~/.bashrc ] && sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc" 2>$null
-  if ($LASTEXITCODE -eq 0) { "✓ Amarel: skill key, deployed sysroot, and ~/.bashrc loader removed" } else { "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)" }
-  # 4) FULL only: delete the local Amarel key pair so Phase 1.2 re-runs
+  # Remove stale amarel-vscode keys from ssh-agent
+  if (ssh-add -l 2>$null | Select-String "amarel-vscode") {
+    $tempFile = [System.IO.Path]::GetTempFileName()
+    ssh-add -L | Select-String "amarel-vscode" | ForEach-Object {
+      $_ | Set-Content $tempFile -Encoding Ascii
+      & ssh-add -d $tempFile 2>$null
+    }
+    Remove-Item $tempFile -ErrorAction SilentlyContinue
+    "✓ Stale amarel-vscode keys removed from ssh-agent"
+  }
+  # Delete local key pair
   Remove-Item -Force "$HOME\.ssh\id_ed25519_amarel","$HOME\.ssh\id_ed25519_amarel.pub" -ErrorAction SilentlyContinue
   "✓ local Amarel key pair deleted"
-} else {
-  # 3) CONFIG: dedupe authorized_keys on Amarel (best-effort; skipped if key auth not set up)
-  & ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys" 2>$null
-  if ($LASTEXITCODE -eq 0) { "✓ Amarel authorized_keys deduped" } else { "• Skipped Amarel dedupe (key auth not set up yet — that's fine)" }
 }
 "Reset ($Mode) complete. Re-run the skill from Phase 0."
 '@ | Set-Content -Path "$dir\reset.ps1" -Encoding UTF8

@@ -7,13 +7,16 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_NAME="amarel-vscode-setup"
+PLUGIN_NAME="amarel-vscode"
 
-install_skill_link() {
+install_link() {
   local agent_name="$1"
-  local skills_dir="$2"
-  local target="${skills_dir}/${SKILL_NAME}"
+  local source_dir="$2"
+  local parent_dir="$3"
+  local name="$4"
+  local target="${parent_dir}/${name}"
 
-  mkdir -p "$skills_dir"
+  mkdir -p "$parent_dir"
 
   # Remove any prior install (symlink or directory)
   if [[ -L "$target" || -e "$target" ]]; then
@@ -22,14 +25,16 @@ install_skill_link() {
   fi
 
   # Symlink so 'git pull' on the repo updates the installed skill automatically
-  ln -s "$REPO_DIR" "$target"
-  echo "✓ Installed for ${agent_name}: $target → $REPO_DIR"
+  ln -s "$source_dir" "$target"
+  echo "✓ Installed for ${agent_name}: $target → $source_dir"
 }
 
-install_skill_link "Claude Code" "${HOME}/.claude/skills"
-install_skill_link "Codex" "${HOME}/.codex/skills"
+install_link "Claude Code" "${REPO_DIR}/skills/${SKILL_NAME}" "${HOME}/.claude/skills" "$SKILL_NAME"
+install_link "Codex" "${REPO_DIR}/skills/${SKILL_NAME}" "${HOME}/.codex/skills" "$SKILL_NAME"
+install_link "Gemini CLI" "$REPO_DIR" "${HOME}/.gemini/config/plugins" "$PLUGIN_NAME"
+install_link "Agents" "${REPO_DIR}/skills/${SKILL_NAME}" "${HOME}/.agents/skills" "$SKILL_NAME"
 
 echo ""
-echo "Restart Claude Code or Codex so it reloads local skills."
+echo "Restart your agent so it reloads the local skills/plugins."
 echo "Claude Code command:  /${SKILL_NAME}"
-echo "Codex: ask it to set up VS Code Remote-SSH for Amarel; it will load this skill by name/description."
+echo "Gemini / Codex: ask it to set up VS Code Remote-SSH for Amarel; it will load this skill by name/description."

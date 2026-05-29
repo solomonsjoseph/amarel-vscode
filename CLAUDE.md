@@ -8,13 +8,13 @@ This is **not** an application — it's an LLM-agnostic *skill/runbook* that set
 
 ## Canonical runbook lives elsewhere — read it first
 
-When the user asks you to "set up Amarel," "fix the GLIBC error," or invokes `/amarel-vscode-setup`, **follow `SKILL.md`** (the Claude Code entry point). `AGENTS.md` is the framework-neutral mirror of the same runbook for other agents (Codex, Cursor, Cline, Gemini). Both contain the full step-by-step manual flow (Phases 0–10), security deny-list, and failure handling. Do not re-derive that content here.
+When the user asks you to "set up Amarel," "fix the GLIBC error," or invokes `/amarel-vscode-setup`, **follow `skills/amarel-vscode-setup/SKILL.md`** (the Claude Code entry point). `AGENTS.md` is the framework-neutral mirror of the same runbook for other agents (Codex, Cursor, Cline, Gemini). Both contain the full step-by-step manual flow (Phases 0–10), security deny-list, and failure handling. Do not re-derive that content here.
 
-`SKILL.md` / `AGENTS.md` walk the user through **one terminal command at a time** — you hand them the command, they run it, they paste output, you advance. **Do NOT run `scripts/setup.sh` or `scripts/setup.ps1` yourself.** The script is the one-shot fallback for users who explicitly ask for it (documented as "Power-user path" in the runbooks).
+`skills/amarel-vscode-setup/SKILL.md` / `AGENTS.md` walk the user through **one terminal command at a time** — you hand them the command, they run it, they paste output, you advance. **Do NOT run `scripts/setup.sh` or `scripts/setup.ps1` yourself.** The script is the one-shot fallback for users who explicitly ask for it (documented as "Power-user path" in the runbooks).
 
 If you edit one runbook file, keep the others in sync. The mirrors are:
 
-- `SKILL.md` — Claude Code (has YAML frontmatter for slash-command discovery)
+- `skills/amarel-vscode-setup/SKILL.md` — Claude Code (has YAML frontmatter for slash-command discovery)
 - `AGENTS.md` — canonical / Codex / Cursor / Cline (per the [agents.md convention](https://agents.md))
 - `GEMINI.md` — Gemini CLI (thin pointer to AGENTS.md)
 - `docs/using-other-llms.md` — bare-LLM copy-paste prompt
@@ -51,13 +51,13 @@ The release flow (see README "Maintainer notes"): `build-sysroot.sh` → update 
 
 ## Security boundaries you must respect
 
-`SKILL.md` § "Security constraints" is the authoritative list and is non-negotiable. The short version: never read `~/.ssh/id_*`, never invoke `sshpass`/`expect`/`security find-generic-password` or any keychain query, never add `-o PasswordAuthentication=yes` to ssh/scp you spawn, never echo a typed password/passphrase into a file or the transcript. The scripts already enforce these at the bash/PowerShell level by using TTY-attached OS prompts (`ssh-copy-id`, `ssh-add`, `ssh-keygen`); your deny-list is defense-in-depth.
+`skills/amarel-vscode-setup/SKILL.md` § "Security constraints" is the authoritative list and is non-negotiable. The short version: never read `~/.ssh/id_*`, never invoke `sshpass`/`expect`/`security find-generic-password` or any keychain query, never add `-o PasswordAuthentication=yes` to ssh/scp you spawn, never echo a typed password/passphrase into a file or the transcript. The scripts already enforce these at the bash/PowerShell level by using TTY-attached OS prompts (`ssh-copy-id`, `ssh-add`, `ssh-keygen`); your deny-list is defense-in-depth.
 
 A fingerprint mismatch in Phase 2 is a hard stop — possible MITM. Do not work around it; tell the user to contact OARC.
 
 ## Conventions worth knowing
 
-- The 11-phase numbering (0–10) in `setup.sh` and the runbooks is load-bearing — error messages, the README troubleshooting table, `SKILL.md`, `AGENTS.md`, `GEMINI.md`, and `docs/using-other-llms.md` all reference phases by number. Don't renumber; insert new phases with `.5` if absolutely needed.
+- The 11-phase numbering (0–10) in `setup.sh` and the runbooks is load-bearing — error messages, the README troubleshooting table, `skills/amarel-vscode-setup/SKILL.md`, `AGENTS.md`, `GEMINI.md`, and `docs/using-other-llms.md` all reference phases by number. Don't renumber; insert new phases with `.5` if absolutely needed.
 - Phase 0 owns local OS detection. Do not ask the user whether they are on macOS, Linux, or Windows; infer it from context or the Phase 0 output and branch from there.
 - Scripts must remain idempotent. Re-running after any failure is the supported recovery path; don't introduce state that breaks on re-run.
 - "🔒 YOUR TURN" is the convention for any prompt the user must type into (vs. confirmations or info lines). Preserve the marker if you add new interactive steps.
