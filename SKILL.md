@@ -442,7 +442,6 @@ Warn:     "Permission denied" on first run before Phase 4.1 is expected — not 
 Fail:     "Permission denied" persisting after Phase 4.2 confirms key is in agent
 On fail:  inspect authorized_keys on Amarel; re-run Phase 3.1 if key not present
 Advance:  Phase 4
-
 ```bash
 ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu 'echo ok' && echo "✓ key auth works"
 ```
@@ -538,7 +537,6 @@ Pass:     line containing "amarel-vscode" printed
 Fail:     no output / "The agent has no identities"
 On fail:  re-run Phase 4.1 (ssh-add)
 Advance:  Phase 4.3
-
 ```bash
 ssh-add -l | grep amarel-vscode && echo "✓ key in agent"
 ```
@@ -551,7 +549,6 @@ Pass:     line containing "amarel-vscode" printed
 Fail:     no output
 On fail:  re-run Phase 4.1 (ssh-add + Start-Service ssh-agent)
 Advance:  Phase 4.3
-
 ```powershell
 ssh-add -l 2>$null | Select-String 'amarel-vscode'
 ```
@@ -663,7 +660,6 @@ Pass:     all five lines present: user <NetID>, identityfile id_ed25519_amarel, 
 Fail:     any of the five lines missing or wrong value
 On fail:  re-edit ~/.ssh/config per decision logic above; re-verify
 Advance:  Phase 4.4 (macOS) or Phase 5 (Linux/Windows)
-
 ```bash
 ssh -G amarel.rutgers.edu | grep -E '^(user|identityfile|identitiesonly|addkeystoagent|controlmaster) '
 ```
@@ -726,7 +722,6 @@ Pass:     three lines: "ok", Amarel hostname (e.g. amarel1.amarel.rutgers.edu), 
 Fail:     hangs, "Permission denied", or fewer than three lines
 On fail:  re-run Phase 4.2 verify and Phase 4.3 ssh_config validation
 Advance:  Phase 6
-
 ```bash
 ssh -o BatchMode=yes -o ConnectTimeout=10 amarel.rutgers.edu 'echo ok; hostname; whoami'
 ```
@@ -765,6 +760,7 @@ than assuming the LLM's cwd:
 
 **macOS/Linux:**
 
+[EXEC]
 ```bash
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
 if [ -z "$REPO_ROOT" ]; then
@@ -775,6 +771,7 @@ fi
 
 **Windows PowerShell:**
 
+[EXEC]
 ```powershell
 $REPO_ROOT = git rev-parse --show-toplevel 2>$null
 if (-not $REPO_ROOT) {
@@ -878,7 +875,6 @@ Warn:     "WARN: checksum not recorded" — proceed but note
 Fail:     "ABORT: SHA-256 MISMATCH"
 On fail:  do not extract; tell user to file an issue; re-download
 Advance:  Phase 6.4
-
 ```bash
 _sha256() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
@@ -906,7 +902,6 @@ Warn:     "WARN: checksum not recorded" — proceed but note
 Fail:     "ABORT: SHA-256 MISMATCH"
 On fail:  do not extract; tell user to file an issue; re-download
 Advance:  Phase 6.4
-
 ```powershell
 $expected = (Select-String -Path "$REPO_ROOT\assets\checksums.txt" -Pattern 'vscode-sysroot-x86_64-linux-gnu\.tgz').Line.Split()[0]
 $actual   = (Get-FileHash -Algorithm SHA256 "$REPO_ROOT\build\vscode-sysroot-x86_64-linux-gnu.tgz").Hash.ToLower()
@@ -1116,7 +1111,6 @@ Pass:     "✓ all verification gates passed"
 Fail:     "FAIL: <gate-names>" on stderr
 On fail:  route to Phase 7.8 branch matching failed gate(s); re-run 7.7 after remedy
 Advance:  Phase 8
-
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
 set -uo pipefail
@@ -1263,7 +1257,6 @@ Pass:     prints /home/<NetID>/.vscode-server/sysroot/usr/bin/patchelf
 Fail:     empty line
 On fail:  inspect ~/.bashrc (Phase 8.3); move source line above any early return
 Advance:  Phase 9
-
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'echo "$VSCODE_SERVER_PATCHELF_PATH"'
 ```
@@ -1472,7 +1465,6 @@ Pass:     "VERIFIED"
 Fail:     "FAIL_VERIFY" or "TOOL_MISSING"
 On fail:  inspect settings.json (cat command in 9.2); fix JSON syntax or re-run 9.1
 Advance:  Phase 10
-
 ```bash
 ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
 set -uo pipefail
