@@ -1,16 +1,33 @@
 {
   "name": "amarel-vscode",
+  "displayName": "Amarel VS Code Skill",
   "version": "1.0.0",
-  "description": "Sets up VS Code Remote-SSH against the Rutgers Amarel HPC cluster.",
+  "description": "Amarel VS Code Skill for Rutgers Amarel: set up VS Code Remote-SSH and fix the GLIBC 2.28 error. Works with Claude Code, Codex, or no LLM.",
   "author": {
-    "name": "OARC / Community"
+    "name": "Community"
   },
   "license": "MIT",
   "keywords": [
-    "rutgers",
     "amarel",
+    "rutgers",
+    "rutgers-amarel",
+    "rutgers-university",
+    "hpc",
+    "high-performance-computing",
     "vscode",
+    "visual-studio-code",
     "remote-ssh",
-    "hpc"
+    "vscode-remote",
+    "vscode-server",
+    "ssh",
+    "centos7",
+    "glibc",
+    "glibc-2.28",
+    "research-computing",
+    "cluster-computing",
+    "claude-code",
+    "codex",
+    "ai-skill",
+    "developer-tools"
   ]
 }

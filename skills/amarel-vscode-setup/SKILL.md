@@ -1,11 +1,13 @@
 ---
 name: amarel-vscode-setup
 description: |
-  Set up VS Code Remote-SSH against the Rutgers Amarel HPC cluster (CentOS 7,
-  glibc 2.17) using a custom-glibc sysroot. Walks the user through the setup
-  one terminal command at a time, waiting for their confirmation between
-  phases. Handles SSH key auth, OS keychain integration, sysroot deployment
-  to the user's $HOME on Amarel, ~/.bashrc wiring, and the VS Code Server
+  Amarel VS Code Skill: set up VS Code Remote-SSH on Rutgers Amarel and fix
+  the GLIBC 2.28 error on macOS or Windows. Works with Claude Code, Codex,
+  or a plain terminal workflow. Uses a custom-glibc sysroot for the CentOS 7,
+  glibc 2.17 Amarel cluster. Walks the user through the setup one terminal
+  command at a time, waiting for their confirmation between phases. Handles
+  SSH key auth, OS keychain integration, sysroot deployment to the user's
+  $HOME on Amarel, ~/.bashrc wiring, and the VS Code Server
   extension-signature workaround. Idempotent and safe to re-run. Requires
   Rutgers VPN connection and a valid Amarel account.
 ---
@@ -1911,5 +1913,4 @@ explicitly asks for it.
 - Microsoft FAQ (the supported workaround pattern): <https://code.visualstudio.com/docs/remote/faq#_can-i-run-vs-code-server-on-older-linux-distributions>
 - ursetto/vscode-sysroot (upstream of the sysroot tarball): <https://github.com/ursetto/vscode-sysroot>
 - AGENTS.md convention: <https://agents.md>
-
 

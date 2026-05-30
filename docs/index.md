@@ -1,0 +1,51 @@
+# Amarel VS Code Skill
+
+Set up VS Code Remote-SSH on Rutgers Amarel and fix the GLIBC 2.28 error on
+macOS or Windows.
+
+This community-maintained project helps Rutgers Amarel users connect with VS
+Code Remote-SSH when VS Code Server fails on Amarel's CentOS 7 environment with
+`expected GLIBC >= v2.28.0`. It works with Claude Code, Codex, other LLM tools,
+or a plain shell/PowerShell script.
+
+This is not an official Rutgers or OARC project.
+
+## Quick Start
+
+```bash
+git clone https://github.com/solomonsjoseph/amarel-vscode.git
+cd amarel-vscode
+./install.sh
+```
+
+On Windows:
+
+```powershell
+.\install.ps1
+```
+
+Then use Claude Code with `/amarel-vscode-setup`, ask Codex to set up VS Code
+Remote-SSH for Amarel, or run the scripts directly:
+
+```bash
+./scripts/setup.sh
+```
+
+```powershell
+pwsh scripts/setup.ps1
+```
+
+## Common Search Terms
+
+- amarel vs code skill
+- Amarel VS Code
+- Rutgers Amarel VS Code
+- VS Code Remote SSH Amarel
+- Amarel GLIBC 2.28
+- Claude Code Amarel skill
+- Codex Amarel skill
+
+## More
+
+See the [main README](../README.md) for prerequisites, security rules,
+troubleshooting, and the full setup flow.

@@ -1,15 +1,40 @@
-# amarel-vscode
+# Amarel VS Code Skill
+## Set up VS Code Remote-SSH on Rutgers Amarel and fix the GLIBC 2.28 error
 
-Fix the **`expected GLIBC >= v2.28.0`** error and set up VS Code Remote-SSH
-for the Rutgers Amarel HPC cluster — in about 5 minutes, with any LLM or no
-LLM at all.
+Amarel VS Code Skill is a community-maintained setup guide and script for
+Rutgers Amarel users who need VS Code Remote-SSH to work on the CentOS 7
+cluster. It fixes the **`expected GLIBC >= v2.28.0`** error by installing a
+pinned user-space sysroot in your Amarel `$HOME`, with any LLM or no LLM at
+all.
+
+This is not an official Rutgers or OARC project.
 
 After setup you connect to Amarel from VS Code in two clicks and **never type
 your Amarel password again**.
 
 ---
 
-## Install
+## Who this is for
+
+- Rutgers Amarel users setting up VS Code Remote-SSH from macOS or Windows.
+- Researchers who hit the VS Code Server `GLIBC >= v2.28.0` error on Amarel.
+- Claude Code, Codex, Gemini CLI, Cursor, and Cline users who want a guided
+  skill.
+- Anyone who prefers to run a plain shell or PowerShell script without an LLM.
+
+## Common search terms this fixes
+
+This repo is meant to be discoverable for:
+
+- amarel vs code skill
+- Amarel VS Code
+- Rutgers Amarel VS Code
+- VS Code Remote SSH Amarel
+- Amarel GLIBC 2.28
+- Claude Code Amarel skill
+- Codex Amarel skill
+
+## Quick start
 
 ### Claude Code or Codex (recommended)
 
@@ -75,6 +100,47 @@ Security rules:
 > **Ollama / LM Studio / local LLMs:** smaller models often struggle
 > following the full runbook. For the most reliable experience, just run
 > `./scripts/setup.sh` directly — no LLM needed.
+
+---
+
+## How do I use VS Code on Rutgers Amarel?
+
+Install VS Code and the Remote-SSH extension, clone this repo, run the guided
+skill or setup script, then connect to `amarel.rutgers.edu` from VS Code's
+Remote-SSH host picker. The setup creates a dedicated SSH key, verifies
+passwordless SSH, installs the sysroot VS Code Server needs, and prints the
+final GUI steps.
+
+## Why does VS Code fail on Amarel with GLIBC >= 2.28?
+
+Amarel runs CentOS 7 with glibc 2.17, while modern VS Code Server builds need
+glibc 2.28 or newer. This repo installs a pinned user-space glibc 2.28 sysroot
+under your Amarel home directory and configures VS Code Server startup to use
+it.
+
+## Is this only for Claude Code?
+
+No. Claude Code can run the packaged skill, but the same workflow is available
+to Codex, Gemini CLI, Cursor, Cline, ChatGPT, Claude.ai, and other LLMs through
+the repo instructions.
+
+## Can I use this without an LLM?
+
+Yes. Run `./scripts/setup.sh` on macOS/Linux or `pwsh scripts/setup.ps1` on
+Windows. The scripts are self-narrating and handle the same setup flow
+interactively.
+
+## Is my Amarel password exposed to the LLM?
+
+No. You type your Amarel password only into an interactive SSH terminal prompt.
+The LLM is forbidden from reading private keys, piping passwords, or using
+password-feeding helpers. See the Security section for the full rules.
+
+## Does this work on macOS and Windows?
+
+Yes. macOS/Linux use the shell scripts and Windows uses the PowerShell scripts.
+Both paths set up VS Code Remote-SSH for Rutgers Amarel and apply the GLIBC
+2.28 sysroot fix.
 
 ---
 
