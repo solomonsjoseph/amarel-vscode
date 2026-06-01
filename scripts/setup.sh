@@ -584,7 +584,13 @@ if ! command -v module >/dev/null 2>&1; then
     [ -f "$i" ] && . "$i" 2>/dev/null && break
   done
 fi
-command -v module >/dev/null 2>&1 && module load git >/dev/null 2>&1 || true
+# Amarel's git modules live in the community tree, NOT on the default MODULEPATH;
+# add it before `module load git`, or the load silently finds nothing and we drop
+# to NO_MODERN_GIT even though a modern git is sitting right there.
+if command -v module >/dev/null 2>&1; then
+  [ -d /projects/community/modulefiles ] && module use /projects/community/modulefiles 2>/dev/null || true
+  module load git >/dev/null 2>&1 || true
+fi
 MODERN_GIT="$(command -v git 2>/dev/null || true)"
 MODERN_VER="$([ -n "$MODERN_GIT" ] && "$MODERN_GIT" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
 
@@ -602,7 +608,10 @@ cat > "$WRAPPER" <<'WRAP'
       [ -f "$i" ] && . "$i" 2>/dev/null && break
     done
   fi
-  command -v module >/dev/null 2>&1 && module load git 2>/dev/null
+  if command -v module >/dev/null 2>&1; then
+    [ -d /projects/community/modulefiles ] && module use /projects/community/modulefiles 2>/dev/null
+    module load git 2>/dev/null
+  fi
 } >/dev/null 2>&1
 exec git "$@"
 WRAP
@@ -617,7 +626,7 @@ else
   rm -f "$WRAPPER"
   echo "NO_MODERN_GIT" >&2
   echo "No git >= 2.5 found (system git: $(/usr/bin/git --version 2>/dev/null))." >&2
-  echo "Run 'module spider git' on Amarel, then set git.path manually." >&2
+  echo "Run 'module use /projects/community/modulefiles && module spider git' on Amarel, then set git.path manually." >&2
   exit 3
 fi
 
@@ -680,7 +689,7 @@ REMOTE
     info "git.path configured + repo-detection self-test passed — VS Code Source Control will detect your repos"
   elif [[ $rc -eq 3 ]]; then
     warn "No git >= 2.5 found on Amarel; Source Control needs a modern git."
-    warn "Run 'module spider git' on Amarel, then set git.path in VS Code's Remote settings (see README troubleshooting)."
+    warn "Run 'module use /projects/community/modulefiles && module spider git' on Amarel, then set git.path in VS Code's Remote settings (see README troubleshooting)."
   elif [[ $rc -eq 4 ]]; then
     warn "git.path was set, but the repo-detection self-test did not pass."
     warn "Verify in VS Code (Developer: Reload Window), or see README troubleshooting."

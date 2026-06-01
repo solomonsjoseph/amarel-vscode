@@ -1737,7 +1737,8 @@ the fix is needed — continue to 11.1. If it already prints `git version 2.5`+
 ### 11.1 — Detect a modern git and write `git.path` (run yourself)
 
 One idempotent remote block: it initialises Lmod in the non-interactive shell,
-loads a modern `git` module, writes a small wrapper at
+adds Amarel's community module tree (`/projects/community/modulefiles`, where the
+git modules actually live), loads a modern `git` module, writes a small wrapper at
 `~/.vscode-server/git-modern.sh` that reproduces that module environment (so VS
 Code — which also spawns git non-interactively — gets the same modern git),
 verifies the wrapper yields git ≥ 2.5 in a **clean** (server-like) environment,
@@ -1763,7 +1764,13 @@ if ! command -v module >/dev/null 2>&1; then
     [ -f "$i" ] && . "$i" 2>/dev/null && break
   done
 fi
-command -v module >/dev/null 2>&1 && module load git >/dev/null 2>&1 || true
+# Amarel's git modules live in the community tree, NOT on the default MODULEPATH;
+# add it before `module load git`, or the load silently finds nothing and we drop
+# to NO_MODERN_GIT even though a modern git is sitting right there.
+if command -v module >/dev/null 2>&1; then
+  [ -d /projects/community/modulefiles ] && module use /projects/community/modulefiles 2>/dev/null || true
+  module load git >/dev/null 2>&1 || true
+fi
 MODERN_GIT="$(command -v git 2>/dev/null || true)"
 MODERN_VER="$([ -n "$MODERN_GIT" ] && "$MODERN_GIT" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
 
@@ -1781,7 +1788,10 @@ cat > "$WRAPPER" <<'WRAP'
       [ -f "$i" ] && . "$i" 2>/dev/null && break
     done
   fi
-  command -v module >/dev/null 2>&1 && module load git 2>/dev/null
+  if command -v module >/dev/null 2>&1; then
+    [ -d /projects/community/modulefiles ] && module use /projects/community/modulefiles 2>/dev/null
+    module load git 2>/dev/null
+  fi
 } >/dev/null 2>&1
 exec git "$@"
 WRAP
@@ -1796,7 +1806,7 @@ else
   rm -f "$WRAPPER"
   echo "NO_MODERN_GIT" >&2
   echo "No git >= 2.5 found (system git: $(/usr/bin/git --version 2>/dev/null))." >&2
-  echo "Run 'module spider git' on Amarel, then set git.path manually (Phase 11.3)." >&2
+  echo "Run 'module use /projects/community/modulefiles && module spider git' on Amarel, then set git.path manually (Phase 11.3)." >&2
   exit 3
 fi
 
@@ -1921,9 +1931,11 @@ Find the module name yourself:
 
 [TTY]
 ```bash
-ssh <NetID>@amarel.rutgers.edu 'module spider git'
+ssh <NetID>@amarel.rutgers.edu 'bash -lc "module use /projects/community/modulefiles; module avail git"'
 ```
 
+(`bash -lc` so Lmod is initialised, and `module use …` so Amarel's community
+git modules are visible — a bare `module spider git` finds nothing without it.)
 Paste the output back and I'll re-run 11.1 loading the exact module
 (`module load git/<version>`). Or set it in the GUI: VS Code **Settings** →
 switch to the **Remote [SSH: amarel.rutgers.edu]** tab → search `git.path` → set

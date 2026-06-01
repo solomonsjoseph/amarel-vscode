@@ -38,10 +38,13 @@ git rev-parse --git-dir --git-common-dir
 fails, repository construction throws, the error is swallowed, and VS Code
 registers **0 repositories** → the empty "Initialize Repository" welcome view.
 
-Amarel's modern git is an **Lmod module** (`module load git`). Lmod initialises
-only in login/interactive shells, so it is **absent** in the server's
-non-interactive context — and the skill never set `git.path`, so the stale
-system git always won.
+Amarel's modern git is an **Lmod module**, but it lives in the **community module
+tree** (`/projects/community/modulefiles`), which is *not* on the default
+`MODULEPATH`. You must `module use /projects/community/modulefiles` before
+`module load git` finds anything — a bare `module load git` (or `module spider
+git`) silently returns nothing. Lmod also initialises only in login/interactive
+shells, so it is **absent** in the server's non-interactive context — and the
+skill never set `git.path`, so the stale system git always won.
 
 > This is **independent** of the "you are connected to an unsupported OS" banner.
 > With the glibc 2.28 sysroot in place the extension host is fully functional;
@@ -72,7 +75,11 @@ if ! command -v module >/dev/null 2>&1; then
     [ -f "$i" ] && . "$i" 2>/dev/null && break
   done
 fi
-command -v module >/dev/null 2>&1 && module load git 2>/dev/null
+if command -v module >/dev/null 2>&1; then
+  # Amarel's git modules are in the community tree, not the default MODULEPATH.
+  [ -d /projects/community/modulefiles ] && module use /projects/community/modulefiles 2>/dev/null
+  module load git 2>/dev/null
+fi
 exec git "$@"
 ```
 
@@ -112,7 +119,9 @@ PASS/FAIL — so you know it works without inspecting the GUI.
    means the fix is needed.
 2. **Find a modern git.** Try, in order:
    - **Lmod / Environment Modules:** `module avail git` → `module load git/<ver>`
-     → `command -v git; git --version`.
+     → `command -v git; git --version`. On Amarel the git modules are in a
+     community tree, so run `module use /projects/community/modulefiles` first
+     (otherwise `module avail git` / `module spider git` show nothing).
    - **Conda:** `conda activate base; which git`.
    - **Spack:** `spack load git`.
 3. **Decide wrapper vs absolute:** `ldd "$(command -v git)"`. Any non-system
