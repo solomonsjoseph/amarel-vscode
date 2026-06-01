@@ -550,6 +550,130 @@ REMOTE
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Phase 9.5 — Point VS Code at a modern git on Amarel (Source Control fix)
+#
+# VS Code Server resolves bare `git` from its non-interactive PATH = CentOS 7's
+# stock /usr/bin/git 1.8.3.1, too old for VS Code's repo-detection probe
+# (`git rev-parse --git-dir --git-common-dir`; --git-common-dir needs git >= 2.5),
+# so Source Control registers 0 repositories. We point the machine-scoped
+# `git.path` at a modern git (an Lmod module on Amarel) via a wrapper that loads
+# the module, merged into the same Machine settings.json as Phase 9.
+#
+# Surfaced as "Phase 11" in the guided runbooks (SKILL.md / AGENTS.md), which
+# walk the user through the post-connect reload + verify. Idempotent. Non-fatal:
+# if no modern git is found the rest of the setup still completes.
+# ─────────────────────────────────────────────────────────────────────────────
+
+phase_configure_git() {
+  heading "Phase 9.5 — Point VS Code at a modern git (Source Control)"
+
+  local rc=0
+  ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" 'bash -se' <<'REMOTE' || rc=$?
+set -uo pipefail
+VSROOT="$HOME/.vscode-server"
+SETTINGS_DIR="$VSROOT/data/Machine"
+SETTINGS_FILE="$SETTINGS_DIR/settings.json"
+WRAPPER="$VSROOT/git-modern.sh"
+
+# git >= 2.5 ? (needs --git-common-dir, which VS Code's repo probe uses)
+ge25() { awk -v v="${1:-0.0}" 'BEGIN{split(v,a,"."); exit !(((a[1]+0)>2)||((a[1]+0)==2&&(a[2]+0)>=5))}'; }
+
+# Make Lmod usable in THIS non-interactive shell, then load a modern git.
+if ! command -v module >/dev/null 2>&1; then
+  for i in /etc/profile.d/lmod.sh /etc/profile.d/modules.sh /usr/share/lmod/lmod/init/bash; do
+    [ -f "$i" ] && . "$i" 2>/dev/null && break
+  done
+fi
+command -v module >/dev/null 2>&1 && module load git >/dev/null 2>&1 || true
+MODERN_GIT="$(command -v git 2>/dev/null || true)"
+MODERN_VER="$([ -n "$MODERN_GIT" ] && "$MODERN_GIT" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+
+mkdir -p "$VSROOT"
+# Wrapper that re-creates the module env every time VS Code calls git.
+cat > "$WRAPPER" <<'WRAP'
+#!/usr/bin/env bash
+# Written by amarel-vscode. VS Code Server calls this as git.path, in a
+# non-interactive context where Lmod is not initialised -- so initialise it,
+# load a modern git, then hand off. Keep stdout clean: only git may write to
+# it, or VS Code mis-parses git's output (some Lmod sites log to stdout).
+{
+  if ! command -v module >/dev/null 2>&1; then
+    for i in /etc/profile.d/lmod.sh /etc/profile.d/modules.sh /usr/share/lmod/lmod/init/bash; do
+      [ -f "$i" ] && . "$i" 2>/dev/null && break
+    done
+  fi
+  command -v module >/dev/null 2>&1 && module load git 2>/dev/null
+} >/dev/null 2>&1
+exec git "$@"
+WRAP
+chmod +x "$WRAPPER"
+WRAP_VER="$(env -i PATH=/usr/bin:/bin HOME="$HOME" bash "$WRAPPER" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+
+if ge25 "$WRAP_VER"; then
+  GITPATH="$WRAPPER"; CHOSEN="wrapper (module load git) -> git $WRAP_VER"
+elif [ -n "$MODERN_GIT" ] && ge25 "$MODERN_VER"; then
+  rm -f "$WRAPPER"; GITPATH="$MODERN_GIT"; CHOSEN="absolute path $MODERN_GIT -> git $MODERN_VER"
+else
+  rm -f "$WRAPPER"
+  echo "NO_MODERN_GIT" >&2
+  echo "No git >= 2.5 found (system git: $(/usr/bin/git --version 2>/dev/null))." >&2
+  echo "Run 'module spider git' on Amarel, then set git.path manually." >&2
+  exit 3
+fi
+
+# Merge git.path into the remote Machine settings.json (preserve all other keys).
+mkdir -p "$SETTINGS_DIR"
+if ! command -v python3 >/dev/null 2>&1; then
+  command -v module >/dev/null 2>&1 && { module load python3 2>/dev/null || module load python 2>/dev/null || true; }
+fi
+if command -v python3 >/dev/null 2>&1; then
+  python3 - "$SETTINGS_FILE" "$GITPATH" <<'PY' || { echo "ERR: settings.json merge failed" >&2; exit 1; }
+import json, os, sys
+path, gp = sys.argv[1], sys.argv[2]
+data = {}
+if os.path.exists(path) and os.path.getsize(path) > 0:
+    with open(path) as f:
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError as exc:
+            sys.exit(f"ERR: {path} is not valid JSON ({exc}); refusing to overwrite")
+    if not isinstance(data, dict):
+        sys.exit(f"ERR: {path} root is not a JSON object; refusing to overwrite")
+data["git.path"] = gp
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(data, f, indent=4)
+    f.write("\n")
+os.replace(tmp, path)
+PY
+elif command -v jq >/dev/null 2>&1; then
+  TMP="$(mktemp "$SETTINGS_DIR/settings.json.XXXXXX")"
+  trap 'rm -f "$TMP"' EXIT
+  if [ -s "$SETTINGS_FILE" ]; then
+    jq --arg gp "$GITPATH" '. + {"git.path": $gp}' "$SETTINGS_FILE" > "$TMP" \
+      || { echo "ERR: $SETTINGS_FILE is not valid JSON; refusing to overwrite" >&2; exit 1; }
+  else
+    jq -n --arg gp "$GITPATH" '{"git.path": $gp}' > "$TMP"
+  fi
+  mv -f "$TMP" "$SETTINGS_FILE"
+else
+  echo "ERR: neither python3 nor jq on Amarel; cannot merge settings.json" >&2
+  exit 1
+fi
+echo "✓ git.path set: $CHOSEN"
+REMOTE
+
+  if [[ $rc -eq 0 ]]; then
+    info "git.path configured — VS Code Source Control will detect your repos"
+  elif [[ $rc -eq 3 ]]; then
+    warn "No git >= 2.5 found on Amarel; Source Control needs a modern git."
+    warn "Run 'module spider git' on Amarel, then set git.path in VS Code's Remote settings (see README troubleshooting)."
+  else
+    warn "Could not configure git.path (non-fatal). Set it later via the skill's Phase 11, or VS Code Remote settings."
+  fi
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Phase 10 — Final instructions (VS Code GUI is human-only)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -609,6 +733,7 @@ EOM
   phase_deploy
   phase_verify_env
   phase_disable_signature_check
+  phase_configure_git
   phase_finish
 }
 

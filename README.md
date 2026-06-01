@@ -170,8 +170,12 @@ Phase 0 of the skill detects your OS and confirms all of these automatically.
 | 8 | Verify the glibc env vars load in a non-interactive SSH session |
 | 9 | Write `"extensions.verifySignature": false` to VS Code Server's settings on Amarel — required for extensions to install on CentOS 7 with the patched node binary |
 | 10 | Print the VS Code GUI steps — connect and you're done |
+| 11 | Point VS Code at a modern git on Amarel (`git.path`) so Source Control detects your repos — CentOS 7's stock git 1.8.3.1 is too old for VS Code's repo probe |
+| 12 | *(Optional)* Authenticate GitHub on Amarel (`gh auth login`) and set your git identity, so commits and pushes work |
 
-After Phase 10: **VS Code → Remote-SSH: Connect to Host → `amarel.rutgers.edu`**
+After Phase 10: **VS Code → Remote-SSH: Connect to Host → `amarel.rutgers.edu`**.
+Then, once connected, Phase 11 fixes Source Control and the optional Phase 12
+sets up GitHub.
 
 ---
 
@@ -186,6 +190,8 @@ After Phase 10: **VS Code → Remote-SSH: Connect to Host → `amarel.rutgers.ed
 | Env vars not loading in non-interactive shells | Check `~/.bashrc` on Amarel for an early `return` that skips the source line — move the sysroot block to the top. |
 | Extension install fails (`signature verification failed`) | Phase 9 handles this and is idempotent — re-run the skill from Phase 9. |
 | Host fingerprint doesn't match OARC's published value | **Stop immediately. Possible MITM attack. Contact OARC.** |
+| Source Control shows "no Git repository" / "Initialize Repository" on a real clone | VS Code Server is using CentOS 7's git 1.8.3.1, too old for its repo probe. Phase 11 sets `git.path` to a modern git (`module load git`) in the remote Machine settings; `setup.sh` / `setup.ps1` now apply it automatically. Deep dive: [docs/source-control-git-fix.md](docs/source-control-git-fix.md). |
+| Push rejected with `GH007` (private email) | Set your GitHub no-reply email, then re-stamp the commit: `git config --global user.email <id>+<user>@users.noreply.github.com && git commit --amend --reset-author --no-edit`, then push. Phase 12 covers GitHub auth + identity. |
 
 ---
 

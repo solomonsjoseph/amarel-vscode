@@ -8,7 +8,7 @@ This is **not** an application — it's an LLM-agnostic *skill/runbook* that set
 
 ## Canonical runbook lives elsewhere — read it first
 
-When the user asks you to "set up Amarel," "fix the GLIBC error," or invokes `/amarel-vscode-setup`, **follow `skills/amarel-vscode-setup/SKILL.md`** (the Claude Code entry point). `AGENTS.md` is the framework-neutral mirror of the same runbook for other agents (Codex, Cursor, Cline, Gemini). Both contain the full step-by-step manual flow (Phases 0–10), security deny-list, and failure handling. Do not re-derive that content here.
+When the user asks you to "set up Amarel," "fix the GLIBC error," or invokes `/amarel-vscode-setup`, **follow `skills/amarel-vscode-setup/SKILL.md`** (the Claude Code entry point). `AGENTS.md` is the framework-neutral mirror of the same runbook for other agents (Codex, Cursor, Cline, Gemini). Both contain the full step-by-step manual flow (Phases 0–12 — Phases 0–10 are SSH + sysroot setup; Phase 11 points VS Code at a modern git so Source Control works; Phase 12 is optional GitHub auth), security deny-list, and failure handling. Do not re-derive that content here.
 
 `skills/amarel-vscode-setup/SKILL.md` / `AGENTS.md` walk the user through **one terminal command at a time** — you hand them the command, they run it, they paste output, you advance. **Do NOT run `scripts/setup.sh` or `scripts/setup.ps1` yourself.** The script is the one-shot fallback for users who explicitly ask for it (documented as "Power-user path" in the runbooks).
 
@@ -36,13 +36,13 @@ AMAREL_USER=netid ./scripts/setup.sh  # non-interactive username
 ./scripts/build-sysroot.sh
 ```
 
-There is no build/lint/test suite. The "tests" are the 11 idempotent phases (0–10) inside `setup.sh` / `setup.ps1`; they self-verify (preflight tools, VPN reachability, key auth via `BatchMode=yes`, env-var survival in non-interactive SSH, settings.json round-trip). Re-running the script after a fix is the canonical way to verify a change.
+There is no build/lint/test suite. The "tests" are the idempotent phases inside `setup.sh` / `setup.ps1` (0–10 plus a **9.5** git.path step); they self-verify (preflight tools, VPN reachability, key auth via `BatchMode=yes`, env-var survival in non-interactive SSH, settings.json round-trip, modern-git detection). Re-running the script after a fix is the canonical way to verify a change.
 
 ## Architecture
 
 The runtime artifact is a tarball (`vscode-sysroot-x86_64-linux-gnu.tgz`) published to GitHub Releases. Locally, the moving parts are:
 
-- `scripts/setup.{sh,ps1}` — the no-LLM / power-user installer (still maintained). 11 phases (0–10): preflight → ssh-keygen → fingerprint verify → ssh-copy-id → ssh-add → BatchMode verify → tarball download+checksum → scp+extract+`.bashrc` edit → non-interactive env-var verify → settings.json signature-disable merge → VS Code GUI hand-off.
+- `scripts/setup.{sh,ps1}` — the no-LLM / power-user installer (still maintained). Phases 0–10 plus a 9.5: preflight → ssh-keygen → fingerprint verify → ssh-copy-id → ssh-add → BatchMode verify → tarball download+checksum → scp+extract+`.bashrc` edit → non-interactive env-var verify → settings.json signature-disable merge → **git.path merge (Phase 9.5: detect a modern git, write a `~/.vscode-server/git-modern.sh` wrapper, set `git.path` so Source Control works)** → VS Code GUI hand-off. The guided runbooks expose 9.5 as **Phase 11** (post-connect, with reload+verify) and add an optional **Phase 12** (GitHub auth) the scripts don't.
 - `assets/sysroot.sh` — the snippet appended to `~/.bashrc` on Amarel. Exports three env vars (`VSCODE_SERVER_CUSTOM_GLIBC_LINKER`, `..._PATH`, `VSCODE_SERVER_PATCHELF_PATH`) that VS Code Server's bootstrap reads to patchelf its node binary against the bundled glibc 2.28. This is Microsoft's documented workaround.
 - `assets/checksums.txt` — SHA-256 pins for the sysroot tarball + patchelf binary. Phase 6 of `setup.sh` refuses to proceed unless the download matches.
 - `scripts/build-sysroot.sh` — maintainer pipeline: clones `ursetto/vscode-sysroot` at a pinned commit, builds via Docker (`linux/amd64`), splices in patchelf ≥ 0.18, re-tars, prints SHAs to paste into `checksums.txt`. The `URSETTO_COMMIT` variable should be a pinned SHA before tagging a release.
@@ -58,7 +58,7 @@ A fingerprint mismatch in Phase 2 is a hard stop — possible MITM. Do not work 
 
 ## Conventions worth knowing
 
-- The 11-phase numbering (0–10) in `setup.sh` and the runbooks is load-bearing — error messages, the README troubleshooting table, `skills/amarel-vscode-setup/SKILL.md`, `AGENTS.md`, and `GEMINI.md` all reference phases by number. Don't renumber; insert new phases with `.5` if absolutely needed.
+- The phase numbering is load-bearing — error messages, the README troubleshooting table, `skills/amarel-vscode-setup/SKILL.md`, `AGENTS.md`, and `GEMINI.md` all reference phases by number. The runbooks run 0–12 (11 = Source Control git.path, 12 = optional GitHub); the scripts run 0–10 plus 9.5 (the same git.path step the runbooks surface as Phase 11). Don't renumber existing phases; append at the end, or insert with `.5`.
 - Phase 0 owns local OS detection. Do not ask the user whether they are on macOS, Linux, or Windows; infer it from context or the Phase 0 output and branch from there.
 - Scripts must remain idempotent. Re-running after any failure is the supported recovery path; don't introduce state that breaks on re-run.
 - "🔒 YOUR TURN" is the convention for any prompt the user must type into (vs. confirmations or info lines). Preserve the marker if you add new interactive steps.

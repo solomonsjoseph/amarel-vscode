@@ -24,7 +24,10 @@ Sets up VS Code Remote-SSH against the **Rutgers Amarel HPC cluster** (CentOS 7,
 glibc 2.17) using a custom-glibc sysroot. VS Code Server 1.99+ requires glibc 2.28
 which CentOS 7 cannot provide, so we install a tarball with glibc 2.28 +
 libstdc++ + patchelf into the user's `$HOME` on Amarel and wire `~/.bashrc` to
-point VS Code at it.
+point VS Code at it. Once connected, **Phase 11** also fixes the Source Control
+"no Git repository" failure (CentOS 7's git 1.8.3.1 is too old for VS Code's repo
+probe) by pointing `git.path` at a modern git on Amarel, and **Phase 12**
+optionally wires up GitHub auth + identity.
 
 ---
 
@@ -32,7 +35,7 @@ point VS Code at it.
 
 > **Execution contract:**
 > 1. This skill executes `[EXEC]` steps autonomously via its Bash tool; it never asks the user to run them.
-> 2. All `[EXEC]` steps are noninteractive: SSH/SCP calls use `-o BatchMode=yes`; no interactive prompts are expected. **Key-auth denial scope (Phases 1–5):** before the key is loaded into the agent (Phase 4.1), the **skip probes** (Phase 1.0 Gate-1 and Phase 3.0) return `Permission denied (publickey,…)` *by construction* — this is an **expected routing signal**, not a failure (Phase 1.0 silences this probe's stderr; only its exit code routes SKIP/PROCEED). Treat an auth failure as a hard failure to escalate only (a) on any `[EXEC]` step in Phases 6–10, or (b) in Phases 1–5 if a denial persists **after** Phase 4.2 confirms the key is loaded (e.g. the Phase 4.2.1 dedupe should succeed once the key is loaded). Never re-run a `[TTY]` password/passphrase step (e.g. Phase 3.1) in response to an expected pre-load denial. Any *non-auth* error (network, missing tool, unexpected output) is always surfaced.
+> 2. All `[EXEC]` steps are noninteractive: SSH/SCP calls use `-o BatchMode=yes`; no interactive prompts are expected. **Key-auth denial scope (Phases 1–5):** before the key is loaded into the agent (Phase 4.1), the **skip probes** (Phase 1.0 Gate-1 and Phase 3.0) return `Permission denied (publickey,…)` *by construction* — this is an **expected routing signal**, not a failure (Phase 1.0 silences this probe's stderr; only its exit code routes SKIP/PROCEED). Treat an auth failure as a hard failure to escalate only (a) on any `[EXEC]` step in Phases 6–12, or (b) in Phases 1–5 if a denial persists **after** Phase 4.2 confirms the key is loaded (e.g. the Phase 4.2.1 dedupe should succeed once the key is loaded). Never re-run a `[TTY]` password/passphrase step (e.g. Phase 3.1) in response to an expected pre-load denial. Any *non-auth* error (network, missing tool, unexpected output) is always surfaced.
 > 3. Key state discovered during execution (`LOCAL_OS`, `NetID`, `REPO_ROOT`, `USE_TARBALL`) is recorded at the phase that first establishes it and reused in all subsequent phases without re-deriving.
 > 4. **Host lock:** The only target is `amarel.rutgers.edu`. Do not substitute any other hostname — not `amarel2.rutgers.edu`, not any other `*.rutgers.edu` host. Every `<NetID>@amarel.rutgers.edu` in this skill is a literal target, not a template.
 
@@ -1662,9 +1665,269 @@ already open (otherwise no action needed).
 - VS Code prompts for password → SSH key auth not fully working. Re-run Phase 4.2 verify and Phase 4.3 ssh_config validation.
 - VS Code server segfaults / patching fails after Allow → likely patchelf issue; **Phase 7.7 should have caught this**, but re-run 7.7 → 7.8 if needed.
 - Repeated install failures even after the above → recovery branch **Phase 7.5** (wipe). Opt-in only.
+- Source Control panel shows *"doesn't have a Git repository / Initialize Repository"* on a folder that **is** a clone → the server is using CentOS 7's stock git 1.8.3.1. Continue to **Phase 11**.
 
-**This is the end of the runbook.** If the status bar turns green, ask the
-user to confirm and you're done.
+**Once the status bar is green, the core sysroot setup is done.** If you'll use
+git / Source Control in VS Code on Amarel, continue to **Phase 11** (and the
+optional **Phase 12** for GitHub). If not, you're finished here.
+
+---
+
+## Phase 11 — Source Control: point VS Code at a modern git
+
+**Goal:** Make VS Code's Source Control panel detect your cloned repos. VS Code
+Server resolves bare `git` from its **non-interactive PATH**, which on Amarel
+(CentOS 7) is the OS-stock `/usr/bin/git` = **git 1.8.3.1**. VS Code's
+repository-detection probe runs `git rev-parse --git-dir --git-common-dir`, and
+`--git-common-dir` was introduced in **git 2.5** — so on 1.8.3.1 the probe fails
+and VS Code registers **0 repositories** (the panel shows *"The folder currently
+open doesn't have a Git repository / Initialize Repository"* even on a real
+clone). The fix: set the machine-scoped **`git.path`** in the remote Machine
+settings to a modern git on Amarel. **Run the `[EXEC]` steps yourself over `ssh
+-o BatchMode=yes`** — this reuses the exact `settings.json` file and merge ladder
+from Phase 9.
+
+> **When this matters:** only once you open a git repo on Amarel in VS Code. If
+> Source Control already shows your branch and changes, `git.path` is already
+> correct — skip to Phase 12 (or finish). This phase is independent of the
+> "unsupported OS" banner, which is harmless once the sysroot is in place.
+
+### 11.0 — Probe: which git does the server see? (run yourself)
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'command -v git; git --version'
+```
+
+**Success marker:** if this prints `git version 1.8.x` (or anything below 2.5),
+the fix is needed — continue to 11.1. If it already prints `git version 2.5`+
+**and** Source Control already works, skip to Phase 12.
+
+### 11.1 — Detect a modern git and write `git.path` (run yourself)
+
+One idempotent remote block: it initialises Lmod in the non-interactive shell,
+loads a modern `git` module, writes a small wrapper at
+`~/.vscode-server/git-modern.sh` that reproduces that module environment (so VS
+Code — which also spawns git non-interactively — gets the same modern git),
+verifies the wrapper yields git ≥ 2.5 in a **clean** (server-like) environment,
+then merges `"git.path"` into `~/.vscode-server/data/Machine/settings.json`
+(preserving `extensions.verifySignature` and every other key). If no module git
+exists it falls back to an absolute modern-git path, or stops with `NO_MODERN_GIT`.
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+set -uo pipefail
+VSROOT="$HOME/.vscode-server"
+SETTINGS_DIR="$VSROOT/data/Machine"
+SETTINGS_FILE="$SETTINGS_DIR/settings.json"
+WRAPPER="$VSROOT/git-modern.sh"
+
+# git >= 2.5 ? (needs --git-common-dir, which VS Code's repo probe uses)
+ge25() { awk -v v="${1:-0.0}" 'BEGIN{split(v,a,"."); exit !(((a[1]+0)>2)||((a[1]+0)==2&&(a[2]+0)>=5))}'; }
+
+# Make Lmod usable in THIS non-interactive shell, then load a modern git.
+if ! command -v module >/dev/null 2>&1; then
+  for i in /etc/profile.d/lmod.sh /etc/profile.d/modules.sh /usr/share/lmod/lmod/init/bash; do
+    [ -f "$i" ] && . "$i" 2>/dev/null && break
+  done
+fi
+command -v module >/dev/null 2>&1 && module load git >/dev/null 2>&1 || true
+MODERN_GIT="$(command -v git 2>/dev/null || true)"
+MODERN_VER="$([ -n "$MODERN_GIT" ] && "$MODERN_GIT" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+
+mkdir -p "$VSROOT"
+# Wrapper that re-creates the module env every time VS Code calls git.
+cat > "$WRAPPER" <<'WRAP'
+#!/usr/bin/env bash
+# Written by amarel-vscode. VS Code Server calls this as git.path, in a
+# non-interactive context where Lmod is not initialised -- so initialise it,
+# load a modern git, then hand off. Keep stdout clean: only git may write to
+# it, or VS Code mis-parses git's output (some Lmod sites log to stdout).
+{
+  if ! command -v module >/dev/null 2>&1; then
+    for i in /etc/profile.d/lmod.sh /etc/profile.d/modules.sh /usr/share/lmod/lmod/init/bash; do
+      [ -f "$i" ] && . "$i" 2>/dev/null && break
+    done
+  fi
+  command -v module >/dev/null 2>&1 && module load git 2>/dev/null
+} >/dev/null 2>&1
+exec git "$@"
+WRAP
+chmod +x "$WRAPPER"
+WRAP_VER="$(env -i PATH=/usr/bin:/bin HOME="$HOME" bash "$WRAPPER" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+
+if ge25 "$WRAP_VER"; then
+  GITPATH="$WRAPPER"; CHOSEN="wrapper (module load git) -> git $WRAP_VER"
+elif [ -n "$MODERN_GIT" ] && ge25 "$MODERN_VER"; then
+  rm -f "$WRAPPER"; GITPATH="$MODERN_GIT"; CHOSEN="absolute path $MODERN_GIT -> git $MODERN_VER"
+else
+  rm -f "$WRAPPER"
+  echo "NO_MODERN_GIT" >&2
+  echo "No git >= 2.5 found (system git: $(/usr/bin/git --version 2>/dev/null))." >&2
+  echo "Run 'module spider git' on Amarel, then set git.path manually (Phase 11.3)." >&2
+  exit 3
+fi
+
+# Merge git.path into the remote Machine settings.json (preserve all other keys).
+mkdir -p "$SETTINGS_DIR"
+if ! command -v python3 >/dev/null 2>&1; then
+  command -v module >/dev/null 2>&1 && { module load python3 2>/dev/null || module load python 2>/dev/null || true; }
+fi
+if command -v python3 >/dev/null 2>&1; then
+  python3 - "$SETTINGS_FILE" "$GITPATH" <<'PY' || { echo "ERR: settings.json merge failed" >&2; exit 1; }
+import json, os, sys
+path, gp = sys.argv[1], sys.argv[2]
+data = {}
+if os.path.exists(path) and os.path.getsize(path) > 0:
+    with open(path) as f:
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError as exc:
+            sys.exit(f"ERR: {path} is not valid JSON ({exc}); refusing to overwrite")
+    if not isinstance(data, dict):
+        sys.exit(f"ERR: {path} root is not a JSON object; refusing to overwrite")
+data["git.path"] = gp
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(data, f, indent=4)
+    f.write("\n")
+os.replace(tmp, path)
+PY
+elif command -v jq >/dev/null 2>&1; then
+  TMP="$(mktemp "$SETTINGS_DIR/settings.json.XXXXXX")"
+  trap 'rm -f "$TMP"' EXIT
+  if [ -s "$SETTINGS_FILE" ]; then
+    jq --arg gp "$GITPATH" '. + {"git.path": $gp}' "$SETTINGS_FILE" > "$TMP" \
+      || { echo "ERR: $SETTINGS_FILE is not valid JSON; refusing to overwrite" >&2; exit 1; }
+  else
+    jq -n --arg gp "$GITPATH" '{"git.path": $gp}' > "$TMP"
+  fi
+  mv -f "$TMP" "$SETTINGS_FILE"
+else
+  echo "ERR: neither python3 nor jq on Amarel; cannot merge settings.json" >&2
+  exit 1
+fi
+echo "✓ git.path set: $CHOSEN"
+REMOTE
+```
+
+**Success marker:** `✓ git.path set: …` (it tells you whether it chose the
+wrapper or an absolute path). The merge is idempotent — re-running is safe.
+
+**If you see `NO_MODERN_GIT`:** Amarel exposes no git ≥ 2.5 the script could
+auto-load. Use the 11.3 fallback.
+
+### 11.2 — Reload and verify in VS Code (your turn)
+
+> **🔒 YOUR TURN:** In your connected VS Code window, open the Command Palette
+> (`Cmd/Ctrl+Shift+P`) and run **Developer: Reload Window**.
+
+After it reloads, open the Source Control panel, then check **View → Output** and
+pick **Git** in the dropdown.
+
+- **Success:** Source Control shows your branch + changes; the Git Output shows
+  `Using git "2.x"` and `repositories (1)`. You're done with Phase 11.
+- **Still empty:** paste the first ~10 lines of the Git Output back to me.
+
+### 11.3 — Fallback: set `git.path` by hand (only if 11.1 said `NO_MODERN_GIT`)
+
+Find the module name yourself:
+
+[TTY]
+```bash
+ssh <NetID>@amarel.rutgers.edu 'module spider git'
+```
+
+Paste the output back and I'll re-run 11.1 loading the exact module
+(`module load git/<version>`). Or set it in the GUI: VS Code **Settings** →
+switch to the **Remote [SSH: amarel.rutgers.edu]** tab → search `git.path` → set
+it to the modern git's absolute path (or to a wrapper that runs `module load
+git`) → **Developer: Reload Window**.
+
+---
+
+## Phase 12 — (Optional) GitHub authentication & git identity
+
+**Goal:** Let git on Amarel authenticate to GitHub without password prompts and
+commit with an identity GitHub accepts. **Skip this phase entirely if you only
+edit files and never push to GitHub from Amarel.**
+
+These steps run **in a terminal on Amarel** — use VS Code's integrated terminal
+(**Terminal → New Terminal** in your connected window) so `gh` and `git` are
+Amarel's, not your laptop's. The device-flow code and the resulting token are
+handled by `gh`; **I never see them.**
+
+### 12.0 — Is `gh` available on Amarel? (run yourself)
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'command -v gh >/dev/null 2>&1 && gh --version | head -1 || { [ -f /etc/profile.d/lmod.sh ] && . /etc/profile.d/lmod.sh 2>/dev/null; command -v module >/dev/null 2>&1 && module load gh 2>/dev/null; command -v gh >/dev/null 2>&1 && gh --version | head -1 || echo NO_GH; }'
+```
+
+- Prints a `gh version …` → good. If it only resolved after a `module load gh`,
+  tell the user to run `module load gh` in the Amarel terminal before 12.1.
+- `NO_GH` → GitHub CLI isn't installed. Either `module spider gh` to find a
+  module, or fall back to a Personal Access Token with git's `store`/`cache`
+  helper (ask me) — then skip to 12.3.
+
+### 12.1 — Sign in to GitHub (your turn — device flow, no browser on Amarel)
+
+> **🔒 YOUR TURN:** In the VS Code integrated terminal **on Amarel**, run the
+> command below. `gh` prints a one-time code and a URL — open the URL on your
+> laptop, paste the code, approve. `BROWSER=` stops it trying to launch a
+> browser on the headless cluster.
+
+[TTY]
+```bash
+BROWSER= gh auth login --hostname github.com --git-protocol https
+```
+
+Choose **HTTPS** and **Login with a web browser** when prompted. Tell me when
+`gh auth status` shows you're logged in.
+
+### 12.2 — Wire `gh` as git's credential helper (your turn)
+
+> **🔒 YOUR TURN:** still in the Amarel terminal — copy this. It must run
+> **after** 12.1; it scopes the credential helper to `github.com` only.
+
+[TTY]
+```bash
+gh auth setup-git
+```
+
+### 12.3 — Set your git identity (your turn)
+
+Find your GitHub no-reply address at <https://github.com/settings/emails> — it
+looks like `12345678+yourname@users.noreply.github.com`. Then set your name and
+that email (substitute your details):
+
+[TTY]
+```bash
+git config --global user.name "Your Name"
+```
+
+[TTY]
+```bash
+git config --global user.email "12345678+yourname@users.noreply.github.com"
+```
+
+> Use the **no-reply** address. If "Keep my email address private" is enabled on
+> GitHub, any push carrying a private address is rejected with **GH007** (12.4).
+
+### 12.4 — If a push is rejected with `GH007` (private email)
+
+After setting the no-reply email (12.3), re-stamp the offending commit, then push:
+
+[TTY]
+```bash
+git commit --amend --reset-author --no-edit
+```
+
+Then `git push` again. If more than one commit carries the wrong address, use an
+interactive rebase (`git rebase -i`) and re-stamp each, or `git filter-repo`.
+
+**This is the end of the runbook.**
 
 ---
 
@@ -1693,6 +1956,11 @@ You **MUST NOT**:
   *command* files — they hold only flags, paths, the NetID, the host, and (on
   Windows) the public `.pub` key. The secret is always entered live at the
   prompt, never written to disk.
+- Read, `cat`, or echo any GitHub token or `gh` credential (Phase 12): not
+  `~/.config/gh/hosts.yml`, not the device-flow code, not a Personal Access
+  Token. `gh auth login` stores and uses the token itself; the user types the
+  device code into a browser on their own machine. Never paste a PAT into a
+  command you run for them — hand them the command to run themselves.
 
 If the user reports their password was leaked or something looks suspicious,
 stop and tell them to rotate their Amarel password via Rutgers OARC.
@@ -1906,7 +2174,7 @@ step-by-step, point them at:
 pwsh scripts/setup.ps1    # Windows
 ```
 
-The script does Phases 0–10 in sequence with the same idempotency guarantees
+The script does Phases 0–10 (plus the 9.5 git.path / Source Control step) in sequence with the same idempotency guarantees
 and the same TTY-based prompts for passwords/passphrases. It does not
 involve you (the LLM) at all. Recommend this path only if the user
 explicitly asks for it.

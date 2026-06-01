@@ -14,9 +14,12 @@ This repo deploys VS Code Remote-SSH against the Rutgers Amarel HPC cluster
 Amarel" or "fix the Remote-SSH GLIBC error":
 
 1. Read `AGENTS.md` for the full step-by-step runbook + security constraints.
-2. Walk the user through **Phases 0–10 one command at a time.** For each
+2. Walk the user through **Phases 0–12 one command at a time.** For each
    phase, give them the exact command in a fenced block, tell them the
    success marker, wait for them to paste the result, then advance.
+   (Phases 0–10 = SSH key auth + sysroot setup; **Phase 11** points VS Code at
+   a modern git on Amarel so Source Control detects repos; **Phase 12** is
+   optional GitHub auth + git identity.)
 3. **Do not ask the user which OS they are on.** Infer it from context when
    possible; otherwise Phase 0 detects it and you branch from that output.
 4. **Do not run the scripts (`scripts/setup.sh` / `scripts/setup.ps1`)
