@@ -39,6 +39,17 @@ optionally wires up GitHub auth + identity.
 > 3. Key state discovered during execution (`LOCAL_OS`, `NetID`, `REPO_ROOT`, `USE_TARBALL`) is recorded at the phase that first establishes it and reused in all subsequent phases without re-deriving.
 > 4. **Host lock:** The only target is `amarel.rutgers.edu`. Do not substitute any other hostname — not `amarel2.rutgers.edu`, not any other `*.rutgers.edu` host. Every `<NetID>@amarel.rutgers.edu` in this skill is a literal target, not a template.
 
+**Two entry modes — decide before Phase 0.**
+- **Full setup** (first-time VS Code-on-Amarel): run Phases 0 → 12 in order.
+- **Targeted repair** (the user is *already connected* — status bar shows
+  `SSH: amarel.rutgers.edu` — and only reports a **Source Control** problem
+  ["no Git repository", the repo won't sync, "Initialize Repository" keeps
+  appearing] or a **GitHub** push/auth problem): still run **Phase 0**
+  (preflight), then **Phase 0.2** confirms key auth and routes you **straight to
+  Phase 11** (Source Control) or **Phase 12** (GitHub). Do **not** drag an
+  already-connected user back through key generation, the host-key prompt, or
+  sysroot deployment (Phases 1–10).
+
 **Phases 1–5 are the SSH key auth dance.** Run each step via Bash yourself
 whenever you can — hand the user a command only when it requires a passphrase
 or password typed at a TTY, or involves a GUI action. After each TTY-bound
@@ -233,6 +244,31 @@ or key. Then begin at Phase 1.
 
 **If the user chose `resume` (or didn't answer):** continue to Phase 1 — the
 skip-probes handle the rest.
+
+### 0.2 — Targeted-repair fast path (already connected → Source Control / GitHub)
+
+Use this **instead of** the 0.1 fresh/resume offer when the user is already
+connected and only needs the Source Control or GitHub fix (see "Two entry
+modes" above). It avoids re-running the SSH-key and sysroot phases.
+
+Substitute the user's NetID, then probe key auth (run yourself):
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu true && echo "READY" || echo "NEEDS_SETUP"
+```
+
+- `READY` → passwordless SSH works (the same auth VS Code Remote-SSH uses), so
+  the user is genuinely set up. **Jump straight to Phase 11** (Source Control);
+  if they only asked about GitHub, jump to **Phase 12**. Skip Phases 1–10.
+- `NEEDS_SETUP` → passwordless SSH is not working (they aren't set up yet, or
+  connected with a password). Fall back to the normal flow — start at **Phase
+  0.1** (fresh/resume) and proceed through **Phase 1.0**'s skip probe; Phase 11
+  still runs at the end.
+
+This is the path for "I'm already connected but Source Control says *no Git
+repository*" — recognise the symptom, confirm with the probe, and go straight to
+the fix.
 
 ---
 

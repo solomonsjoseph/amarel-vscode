@@ -19,7 +19,9 @@ Amarel" or "fix the Remote-SSH GLIBC error":
    success marker, wait for them to paste the result, then advance.
    (Phases 0–10 = SSH key auth + sysroot setup; **Phase 11** points VS Code at
    a modern git on Amarel so Source Control detects repos; **Phase 12** is
-   optional GitHub auth + git identity.)
+   optional GitHub auth + git identity.) **If the user is already connected and
+   only Source Control / git (or GitHub) is broken, use the Phase 0.2 fast path
+   in `AGENTS.md` to jump straight to Phase 11/12 — don't re-run Phases 1–10.**
 3. **Do not ask the user which OS they are on.** Infer it from context when
    possible; otherwise Phase 0 detects it and you branch from that output.
 4. **Do not run the scripts (`scripts/setup.sh` / `scripts/setup.ps1`)
