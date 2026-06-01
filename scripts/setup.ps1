@@ -199,7 +199,7 @@ function Invoke-PhaseKnownHost {
 function Invoke-PhaseCopyId {
   Write-Heading "Phase 3 — Install public key on Amarel"
 
-  $sshArgs = @('-o','BatchMode=yes','-o','ConnectTimeout=5','-i',$SshKeyPath,"$AmarelUser@$AmarelHost",'true')
+  $sshArgs = @('-o','BatchMode=yes','-o','ConnectTimeout=5','-i',$SshKeyPath,'-o','IdentitiesOnly=yes',"$AmarelUser@$AmarelHost",'true')
   & ssh @sshArgs 2>$null
   if ($LASTEXITCODE -eq 0) {
     Write-Info "Key-based login already works — skipping ssh-copy-id"
@@ -220,7 +220,7 @@ function Invoke-PhaseCopyId {
   $pubkey | & ssh -tt -o PreferredAuthentications=password -o PubkeyAuthentication=no "$AmarelUser@$AmarelHost" $remoteCmd
 
   # Verify
-  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i $SshKeyPath "$AmarelUser@$AmarelHost" 'true' 2>$null
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i $SshKeyPath -o IdentitiesOnly=yes "$AmarelUser@$AmarelHost" 'true' 2>$null
   if ($LASTEXITCODE -ne 0) {
     Die "Public key install appeared to succeed but key auth still fails. Inspect ~/.ssh/authorized_keys on Amarel."
   }

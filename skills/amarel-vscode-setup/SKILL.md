@@ -139,7 +139,7 @@ The complete human touch-point list — everything not on this list is `[EXEC]`:
 |---|---|---|---|---|
 | 1 | 1.2 | `ssh-keygen -t ed25519 …` | Passphrase prompt on TTY — LLM cannot see | All |
 | 2 | 3.1 | `bash ~/.cache/amarel-vscode/step-3.1.sh` (staged ssh-copy-id) | **⚠ LAST AMAREL PASSWORD EVER** — password on TTY | All |
-| 3 | 3.1.1 | `ssh -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu` | Key passphrase on TTY; confirms key installed | All |
+| 3 | 3.1.1 | `ssh -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu` | Key passphrase on TTY; confirms key installed | All |
 | 4 | 4.1 | `ssh-add --apple-use-keychain …` / `ssh-add …` | Passphrase to agent on TTY | All |
 | 5 | 10 | VS Code GUI — click Allow, watch status bar | No Bash equivalent | All |
 
@@ -250,7 +250,7 @@ Substitute the user's NetID, then probe key auth (run yourself):
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu true && echo "READY" || echo "NEEDS_SETUP"
+ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu true && echo "READY" || echo "NEEDS_SETUP"
 ```
 
 - `READY` → passwordless SSH works (the same auth VS Code Remote-SSH uses), so
@@ -275,8 +275,10 @@ keeps it separate from any GitHub key).
 ### 1.0 — Full skip probe (run yourself)
 
 Before anything, probe whether key auth already works **and** the `ssh_config`
-block is fully correct. This uses `-i` explicitly so success via an unrelated
-loaded key does not falsely satisfy the gate.
+block is fully correct. This uses `-i` **with `-o IdentitiesOnly=yes`** so ssh
+offers only the Amarel key — otherwise an unrelated key in your agent could
+authenticate and falsely satisfy the gate (`-i` alone does not restrict which
+agent keys ssh offers).
 
 **macOS/Linux — run yourself:**
 
@@ -285,7 +287,7 @@ loaded key does not falsely satisfy the gate.
 # Gate 1: key auth (stderr silenced — only the exit code routes SKIP/PROCEED;
 # a pre-setup "Permission denied"/"Host key verification failed" here is normal)
 ssh -o BatchMode=yes -o ConnectTimeout=5 \
-    -i ~/.ssh/id_ed25519_amarel \
+    -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes \
     <NetID>@amarel.rutgers.edu true 2>/dev/null
 KEY_OK=$?
 
@@ -308,7 +310,7 @@ fi
 [EXEC]
 ```powershell
 & ssh -o BatchMode=yes -o ConnectTimeout=5 `
-    -i "$HOME\.ssh\id_ed25519_amarel" `
+    -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes `
     "<NetID>@amarel.rutgers.edu" true 2>&1 | Out-Null
 $keyOk = ($LASTEXITCODE -eq 0)
 $cfg = & ssh -G amarel.rutgers.edu 2>$null
@@ -464,7 +466,7 @@ so future logins use the key instead of a password.
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu true 2>/dev/null && echo "ALREADY WORKS — skip Phase 3" || echo "NEEDS key install"
+ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu true 2>/dev/null && echo "ALREADY WORKS — skip Phase 3" || echo "NEEDS key install"
 ```
 
 If `ALREADY WORKS`, skip to Phase 4.
@@ -542,14 +544,14 @@ pwsh -ep Bypass -File "$env:LOCALAPPDATA\amarel-vscode\step-3.1.ps1"
 
 [TTY]
 ```bash
-ssh -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu
+ssh -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu
 ```
 
 **Windows PowerShell — copy this:**
 
 [TTY]
 ```powershell
-ssh -i "$HOME\.ssh\id_ed25519_amarel" "<NetID>@amarel.rutgers.edu"
+ssh -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes "<NetID>@amarel.rutgers.edu"
 ```
 
 > SSH will prompt for your **key passphrase** (the one you set in Phase 1.2 — not your Amarel password). Enter it and check the result:
@@ -702,11 +704,19 @@ copies). `sort -u` is idempotent:
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
+ssh -o BatchMode=yes -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
 ```
 
-If this returns `Permission denied`, the key isn't really loaded — re-run Phase
-4.2 verify (and 4.1 if needed) before continuing. Otherwise advance to Phase 4.3.
+**`-i … -o IdentitiesOnly=yes` is load-bearing here.** `ssh_config` isn't written
+until Phase 4.3, so without it ssh offers *every* key in your agent; if you have
+several, Amarel hits `MaxAuthTries` before your Amarel key is tried and returns a
+**false** `Permission denied`. Pinning the identity makes ssh offer only the
+Amarel key, so this reflects the real authorized_keys state.
+
+If this *still* returns `Permission denied` with the identity pinned, the Amarel
+key genuinely isn't in `~/.ssh/authorized_keys` — only then re-check the Phase
+3.1 install (and confirm Phase 4.2 shows the key in the agent). Otherwise advance
+to Phase 4.3.
 
 ### 4.3 — Write strict ssh_config (run yourself)
 

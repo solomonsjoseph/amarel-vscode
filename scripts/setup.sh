@@ -210,7 +210,7 @@ phase_copy_id() {
   heading "Phase 3 — Install public key on Amarel"
 
   # Already passwordless?
-  if ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$SSH_KEY_PATH" \
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$SSH_KEY_PATH" -o IdentitiesOnly=yes \
        "${AMAREL_USER}@${AMAREL_HOST}" 'true' >/dev/null 2>&1; then
     info "Key-based login already works — skipping ssh-copy-id"
     return 0
@@ -231,7 +231,7 @@ phase_copy_id() {
     "${AMAREL_USER}@${AMAREL_HOST}" </dev/tty
 
   # Re-verify with BatchMode (no fallback to password).
-  if ! ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$SSH_KEY_PATH" \
+  if ! ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$SSH_KEY_PATH" -o IdentitiesOnly=yes \
         "${AMAREL_USER}@${AMAREL_HOST}" 'true' >/dev/null 2>&1; then
     die "ssh-copy-id appeared to succeed but key auth still fails. Inspect ~/.ssh/authorized_keys on Amarel."
   fi
