@@ -190,7 +190,7 @@ sets up GitHub.
 | Env vars not loading in non-interactive shells | Check `~/.bashrc` on Amarel for an early `return` that skips the source line — move the sysroot block to the top. |
 | Extension install fails (`signature verification failed`) | Phase 9 handles this and is idempotent — re-run the skill from Phase 9. |
 | Host fingerprint doesn't match OARC's published value | **Stop immediately. Possible MITM attack. Contact OARC.** |
-| Source Control shows "no Git repository" / "Initialize Repository" on a real clone | VS Code Server is using CentOS 7's git 1.8.3.1, too old for its repo probe. Phase 11 sets `git.path` to a modern git (`module load git`) in the remote Machine settings, then self-tests that VS Code will detect repos; `setup.sh` / `setup.ps1` apply and self-test it automatically. Deep dive: [docs/source-control-git-fix.md](docs/source-control-git-fix.md). |
+| Source Control shows "no Git repository" / "Initialize Repository" on a real clone | VS Code Server is using CentOS 7's git 1.8.3.1, too old for its repo probe. Phase 11 sets `git.path` to a modern git in the remote Machine settings (on Amarel, `module use /projects/community/modulefiles` then `module load git` — the git modules aren't on the default `MODULEPATH`), then self-tests that VS Code will detect repos; `setup.sh` / `setup.ps1` apply and self-test it automatically. Deep dive: [docs/source-control-git-fix.md](docs/source-control-git-fix.md). |
 | Push rejected with `GH007` (private email) | Set your GitHub no-reply email, then re-stamp the commit: `git config --global user.email <id>+<user>@users.noreply.github.com && git commit --amend --reset-author --no-edit`, then push. Phase 12 covers GitHub auth + identity. |
 
 ---
