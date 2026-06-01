@@ -1845,11 +1845,65 @@ REMOTE
 
 **Success marker:** `✓ git.path set: …` (it tells you whether it chose the
 wrapper or an absolute path). The merge is idempotent — re-running is safe.
+Continue to **11.2** to verify the fix end-to-end.
 
 **If you see `NO_MODERN_GIT`:** Amarel exposes no git ≥ 2.5 the script could
 auto-load. Use the 11.3 fallback.
 
-### 11.2 — Reload and verify in VS Code (your turn)
+### 11.2 — Verify the fix
+
+**First, an automated check (run yourself).** This reproduces VS Code's exact
+repo-detection probe — `git rev-parse --git-dir --git-common-dir` — through the
+`git.path` you just wrote, inside a throwaway repo in a clean server-like
+environment, and returns a clear PASS/FAIL. It is the deterministic "does the fix
+actually work?" test; you don't have to eyeball the GUI to know.
+
+[VERIFY]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+set -uo pipefail
+SETTINGS_FILE="$HOME/.vscode-server/data/Machine/settings.json"
+ge25() { awk -v v="${1:-0.0}" 'BEGIN{split(v,a,"."); exit !(((a[1]+0)>2)||((a[1]+0)==2&&(a[2]+0)>=5))}'; }
+# Read the git.path VS Code will actually use.
+GP=""
+if command -v python3 >/dev/null 2>&1; then
+  GP="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("git.path",""))' "$SETTINGS_FILE" 2>/dev/null)"
+elif command -v jq >/dev/null 2>&1; then
+  GP="$(jq -r '."git.path" // empty' "$SETTINGS_FILE" 2>/dev/null)"
+fi
+# Last-resort parse if neither python3 nor jq is on this shell (Amarel paths have no quotes/backslashes).
+[ -n "$GP" ] || GP="$(sed -n 's/.*"git\.path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SETTINGS_FILE" 2>/dev/null | head -n1)"
+[ -n "$GP" ] || { echo "FAIL: git.path is not set in $SETTINGS_FILE -- run 11.1 first." >&2; exit 1; }
+GP_VER="$(env -i PATH=/usr/bin:/bin HOME="$HOME" "$GP" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+STOCK_VER="$(/usr/bin/git --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+# Throwaway repo; run VS Code's exact probe with cwd = repo (as VS Code does).
+TESTREPO="$(mktemp -d "${TMPDIR:-/tmp}/amarel-scm.XXXXXX")"
+trap 'rm -rf "$TESTREPO"' EXIT
+/usr/bin/git init -q "$TESTREPO" 2>/dev/null || true
+if ( cd "$TESTREPO" && env -i PATH=/usr/bin:/bin HOME="$HOME" "$GP" rev-parse --git-dir --git-common-dir ) >/dev/null 2>&1 && ge25 "$GP_VER"; then
+  GP_OK=1
+else
+  GP_OK=0
+fi
+echo "VS Code repo-detection probe: git rev-parse --git-dir --git-common-dir"
+echo "  via git.path : git ${GP_VER:-<none>}  ->  $([ $GP_OK = 1 ] && echo PASS || echo FAIL)   [$GP]"
+echo "  stock git    : git ${STOCK_VER:-?} (too old for --git-common-dir; the bug Phase 11 fixes)"
+if [ $GP_OK = 1 ]; then
+  echo "✓ Source Control fix VERIFIED -- VS Code will detect repositories."
+else
+  echo "✗ git.path does NOT satisfy the probe -- re-run 11.1, or use the 11.3 fallback." >&2
+  exit 1
+fi
+REMOTE
+```
+
+**Success marker:** `✓ Source Control fix VERIFIED …`, with the `via git.path`
+line showing `PASS`. A `FAIL` there (or `git.path is not set`) means re-run 11.1,
+or use the 11.3 fallback if Amarel exposes no modern git. (The `stock git` line is
+informational — it shows the old `/usr/bin/git` version VS Code would otherwise
+use.)
+
+**Then confirm it live (your turn).**
 
 > **🔒 YOUR TURN:** In your connected VS Code window, open the Command Palette
 > (`Cmd/Ctrl+Shift+P`) and run **Developer: Reload Window**.
@@ -2014,12 +2068,16 @@ contents. Two modes (the script takes one argument):
   created. On top of `config`, it deletes the local `id_ed25519_amarel` key pair
   and, in one SSH call (while key auth still works), removes the skill's key from
   Amarel's `authorized_keys`, deletes the deployed `~/.vscode-server/sysroot` +
-  `sysroot.sh` (and any leftover upload), and strips the `~/.bashrc` loader block
-  — forcing **every** phase (1–9) to re-run from scratch (you'll set a new
-  passphrase, enter your Amarel password once more, and re-deploy the sysroot).
-  This is the mode the Phase 0.1 "fresh start" offer uses. The Amarel-side wipe is
-  best-effort: if key auth is already broken it's skipped, and Phases 3/7 rebuild
-  that state anyway.
+  `sysroot.sh` (and any leftover upload), strips the `~/.bashrc` loader block,
+  **removes the Phase 11 `~/.vscode-server/git-modern.sh` wrapper, and strips the
+  skill-written `git.path` and `extensions.verifySignature` keys from the remote
+  Machine `settings.json`** (so it returns to its pre-skill state — any keys you
+  added yourself are preserved) — forcing **every** phase (1–11) to re-run from
+  scratch (you'll set a new passphrase, enter your Amarel password once more,
+  re-deploy the sysroot, and re-apply the Source Control fix). This is the mode
+  the Phase 0.1 "fresh start" offer uses. The Amarel-side wipe is best-effort: if
+  key auth is already broken it's skipped, and Phases 3/7/11 rebuild that state
+  anyway.
 
 Substitute the real NetID for `<NetID>`. Because the reset logic is long, stage
 it to `~/.cache/amarel-vscode/reset.sh` via `[EXEC]` first (same width-budget
@@ -2035,12 +2093,39 @@ MODE="${1:-config}"   # "config" (default) or "full" (also deletes the key pair)
 
 # 1) FULL or CONFIG: Amarel-side cleanup/dedupe first, while SSH config and keys are fully intact!
 if [ "$MODE" = "full" ]; then
-  if ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu '
-        sed -i.bak "/amarel-vscode/d" ~/.ssh/authorized_keys 2>/dev/null
-        rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz
-        [ -f ~/.bashrc ] && sed -i.bak -e "/# VS Code Server custom glibc workaround/d" -e "\#vscode-server/sysroot\.sh#d" ~/.bashrc
-      ' 2>/dev/null; then
-    echo "✓ Amarel: skill key, deployed sysroot, and ~/.bashrc loader removed"
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu 'bash -se' <<'AMAREL' 2>/dev/null
+set -u
+sed -i.bak "/amarel-vscode/d" ~/.ssh/authorized_keys 2>/dev/null
+rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz
+rm -f ~/.vscode-server/git-modern.sh
+[ -f ~/.bashrc ] && sed -i.bak -e "/# VS Code Server custom glibc workaround/d" -e "\#vscode-server/sysroot\.sh#d" ~/.bashrc
+# Return the remote Machine settings.json to its pre-skill state: drop ONLY the
+# two keys the skill wrote (git.path, extensions.verifySignature); keep user keys.
+SETTINGS="$HOME/.vscode-server/data/Machine/settings.json"
+if [ -f "$SETTINGS" ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$SETTINGS" <<'PY' 2>/dev/null || true
+import json, os, sys
+p = sys.argv[1]
+if os.path.exists(p) and os.path.getsize(p) > 0:
+    try:
+        with open(p) as f: d = json.load(f)
+    except Exception:
+        raise SystemExit(0)
+    if isinstance(d, dict):
+        for k in ("git.path", "extensions.verifySignature"): d.pop(k, None)
+        tmp = p + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(d, f, indent=4); f.write("\n")
+        os.replace(tmp, p)
+PY
+  elif command -v jq >/dev/null 2>&1; then
+    TMP="$(mktemp)"; jq 'del(."git.path", ."extensions.verifySignature")' "$SETTINGS" > "$TMP" 2>/dev/null && mv -f "$TMP" "$SETTINGS" || rm -f "$TMP"
+  fi
+fi
+AMAREL
+  then
+    echo "✓ Amarel: skill key, sysroot, ~/.bashrc loader, git-modern.sh, and git.path/verifySignature settings removed"
   else
     echo "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)"
   fi
@@ -2122,8 +2207,8 @@ Set-StrictMode -Version Latest
 
 # 1) FULL or CONFIG: Amarel-side cleanup/dedupe first, while SSH config and keys are fully intact!
 if ($Mode -eq 'full') {
-  & ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sed -i.bak '/amarel-vscode/d' ~/.ssh/authorized_keys 2>/dev/null; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz; [ -f ~/.bashrc ] && sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc" 2>$null
-  if ($LASTEXITCODE -eq 0) { "✓ Amarel: skill key, deployed sysroot, and ~/.bashrc loader removed" } else { "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)" }
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sed -i.bak '/amarel-vscode/d' ~/.ssh/authorized_keys 2>/dev/null; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz; rm -f ~/.vscode-server/git-modern.sh; [ -f ~/.bashrc ] && sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc; if command -v python3 >/dev/null 2>&1; then python3 -c 'import json,os;p=os.path.expanduser(`"~/.vscode-server/data/Machine/settings.json`");d=(json.load(open(p)) if os.path.exists(p) and os.path.getsize(p)>0 else {});d=(d if isinstance(d,dict) else {});[d.pop(k,None) for k in (`"git.path`",`"extensions.verifySignature`")];open(p,`"w`").write(json.dumps(d,indent=4)+chr(10))' 2>/dev/null; elif command -v jq >/dev/null 2>&1; then jq 'del(.`"git.path`", .`"extensions.verifySignature`")' ~/.vscode-server/data/Machine/settings.json > ~/.vscode-server/data/Machine/settings.json.tmp 2>/dev/null && mv -f ~/.vscode-server/data/Machine/settings.json.tmp ~/.vscode-server/data/Machine/settings.json; fi; true" 2>$null
+  if ($LASTEXITCODE -eq 0) { "✓ Amarel: skill key, sysroot, ~/.bashrc loader, git-modern.sh, and git.path/verifySignature settings removed" } else { "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)" }
 } else {
   & ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys" 2>$null
   if ($LASTEXITCODE -eq 0) { "✓ Amarel authorized_keys deduped" } else { "• Skipped Amarel dedupe (key auth not set up yet — that's fine)" }

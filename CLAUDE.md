@@ -36,7 +36,7 @@ AMAREL_USER=netid ./scripts/setup.sh  # non-interactive username
 ./scripts/build-sysroot.sh
 ```
 
-There is no build/lint/test suite. The "tests" are the idempotent phases inside `setup.sh` / `setup.ps1` (0–10 plus a **9.5** git.path step); they self-verify (preflight tools, VPN reachability, key auth via `BatchMode=yes`, env-var survival in non-interactive SSH, settings.json round-trip, modern-git detection). Re-running the script after a fix is the canonical way to verify a change.
+There is no build/lint/test suite. The "tests" are the idempotent phases inside `setup.sh` / `setup.ps1` (0–10 plus a **9.5** git.path step); they self-verify (preflight tools, VPN reachability, key auth via `BatchMode=yes`, env-var survival in non-interactive SSH, settings.json round-trip, modern-git detection, and a Source Control repo-detection self-test that reproduces VS Code's `git rev-parse --git-dir --git-common-dir` probe through the configured `git.path`). Re-running the script after a fix is the canonical way to verify a change.
 
 ## Architecture
 

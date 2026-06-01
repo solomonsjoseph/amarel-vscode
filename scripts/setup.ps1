@@ -557,7 +557,20 @@ else
   echo "ERR: neither python3 nor jq available on Amarel; cannot merge settings.json" >&2
   exit 1
 fi
-echo "git.path set: $CHOSEN"
+# Self-test: reproduce VS Code's repo-detection probe through the chosen git.path,
+# in a throwaway repo + clean (server-like) env. Non-fatal signal (exit 4) if it
+# does not pass, so the caller can warn without aborting the run.
+TESTREPO="$(mktemp -d "${TMPDIR:-/tmp}/amarel-scm.XXXXXX")"
+/usr/bin/git init -q "$TESTREPO" 2>/dev/null || true
+if ( cd "$TESTREPO" && env -i PATH=/usr/bin:/bin HOME="$HOME" "$GITPATH" rev-parse --git-dir --git-common-dir ) >/dev/null 2>&1; then
+  rm -rf "$TESTREPO"
+  echo "git.path set + repo-detection self-test PASSED: $CHOSEN"
+else
+  rm -rf "$TESTREPO"
+  echo "git.path set: $CHOSEN"
+  echo "SELFTEST_FAIL: VS Code repo-detection probe did not pass via git.path" >&2
+  exit 4
+fi
 '@
 
   # Native nonzero exit (e.g. NO_MODERN_GIT -> 3) must stay non-fatal, so guard
@@ -574,10 +587,13 @@ echo "git.path set: $CHOSEN"
   }
 
   if ($rc -eq 0) {
-    Write-Info "git.path configured — VS Code Source Control will detect your repos"
+    Write-Info "git.path configured + repo-detection self-test passed — VS Code Source Control will detect your repos"
   } elseif ($rc -eq 3) {
     Write-Warn "No git >= 2.5 found on Amarel; Source Control needs a modern git."
     Write-Warn "Run 'module spider git' on Amarel, then set git.path in VS Code's Remote settings (see README troubleshooting)."
+  } elseif ($rc -eq 4) {
+    Write-Warn "git.path was set, but the repo-detection self-test did not pass."
+    Write-Warn "Verify in VS Code (Developer: Reload Window), or see README troubleshooting."
   } else {
     Write-Warn "Could not configure git.path (non-fatal). Set it later via the skill's Phase 11, or VS Code Remote settings."
   }

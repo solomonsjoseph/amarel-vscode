@@ -98,6 +98,12 @@ Resulting `settings.json` (other keys preserved):
 After writing it, run **Developer: Reload Window**. The Git output should then
 show `Using git "2.x"` and `repositories (1)`.
 
+**Automated check.** Phase 11.2 of the skill (and `setup.sh` / `setup.ps1`) now
+self-tests the fix: it runs VS Code's exact repo-detection probe
+(`git rev-parse --git-dir --git-common-dir`) through the configured `git.path`,
+in a throwaway repo under a clean server-like environment, and reports a clear
+PASS/FAIL — so you know it works without inspecting the GUI.
+
 ---
 
 ## Doing it by hand (other clusters, or when the auto-detect can't)
@@ -169,3 +175,4 @@ For multiple bad commits, use `git rebase -i` (re-stamp each) or `git filter-rep
 | `gh auth setup-git` before `gh auth login` | "not logged into any GitHub hosts" | Log in first, then `setup-git` |
 | Private email in `user.email` | `GH007` on push | Use the GitHub no-reply address |
 | VS Code Server upgrade clears settings | Source Control breaks again | Re-run the skill from Phase 11 (idempotent) |
+| Fresh start (`reset.sh full` / the skill's "fresh start" offer) | Removes the `git-modern.sh` wrapper **and** strips the `git.path` + `extensions.verifySignature` keys, returning `settings.json` to its pre-skill state (user-added keys kept) | Intentional — re-running the skill (Phase 11) rebuilds it; this is what makes a clean re-test possible |
