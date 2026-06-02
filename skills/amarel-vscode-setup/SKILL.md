@@ -24,7 +24,7 @@ description: |
 # amarel-vscode-setup
 
 > **Note:** This file is the Claude Code entry point. The same runbook lives
-> in [`AGENTS.md`](AGENTS.md) for other agents (Codex, Gemini, Cursor, Cline).
+> in [`AGENTS.md`](../../AGENTS.md) for other agents (Codex, Gemini, Cursor, Cline).
 > If you update one, keep them in sync.
 
 You are guiding a developer through installing VS Code Remote-SSH access to

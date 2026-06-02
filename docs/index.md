@@ -35,6 +35,8 @@ Then run `/plugins` in the Codex TUI → install **amarel-vscode**.
 gemini extensions install https://github.com/solomonsjoseph/amarel-vscode --ref main
 ```
 
+`--ref main` installs from the branch — without it, `gemini extensions install` pulls the latest GitHub Release, which ships the sysroot tarball but not this extension's manifest.
+
 **Cursor, Cline, or no LLM — clone and link:**
 
 ```bash

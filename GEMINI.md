@@ -53,7 +53,7 @@ If the user asks you to "install this skill" or "install this plugin":
 > does not apply to Gemini. The **Gemini-native** one-command install is
 > `gemini extensions install https://github.com/solomonsjoseph/amarel-vscode --ref main`
 > (`--ref main` because `gemini extensions install` otherwise pulls the latest GitHub
-> Release, which ships only the sysroot tarball — not this extension manifest). Use
+> Release, which ships the sysroot tarball but not this extension's manifest). Use
 > `gemini extensions link <repo>` for local dev. `./install.sh` / `install.ps1` also
 > link the repo into `~/.gemini/extensions`.
 
