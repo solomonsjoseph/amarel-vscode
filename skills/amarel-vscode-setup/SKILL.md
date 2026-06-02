@@ -1965,20 +1965,32 @@ These steps run **in a terminal on Amarel** — use VS Code's integrated termina
 Amarel's, not your laptop's. The device-flow code and the resulting token are
 handled by `gh`; **I never see them.**
 
-### 12.0 — Is `gh` available on Amarel? (run yourself)
+### 12.0 — Is `gh` available, and are you already signed in? (run yourself)
+
+One probe answers both: it finds `gh` (adding Amarel's community module tree if
+needed, same as Phase 11), prints the version, then checks `gh auth status` —
+so we run the sign-in step **only if you are not already logged in**.
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'command -v gh >/dev/null 2>&1 && gh --version | head -1 || { [ -f /etc/profile.d/lmod.sh ] && . /etc/profile.d/lmod.sh 2>/dev/null; command -v module >/dev/null 2>&1 && module load gh 2>/dev/null; command -v gh >/dev/null 2>&1 && gh --version | head -1 || echo NO_GH; }'
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'command -v gh >/dev/null 2>&1 || { for i in /etc/profile.d/modules.sh /etc/profile.d/lmod.sh /usr/share/lmod/lmod/init/bash; do [ -f "$i" ] && . "$i" 2>/dev/null && break; done; command -v module >/dev/null 2>&1 && { module use /projects/community/modulefiles 2>/dev/null; module load gh 2>/dev/null; }; }; if command -v gh >/dev/null 2>&1; then gh --version | head -1; gh auth status >/dev/null 2>&1 && echo AUTHED || echo NEEDS_LOGIN; else echo NO_GH; fi'
 ```
 
-- Prints a `gh version …` → good. If it only resolved after a `module load gh`,
-  tell the user to run `module load gh` in the Amarel terminal before 12.1.
+- `gh version …` + **`AUTHED`** → already signed in to GitHub. **Skip 12.1.** Go
+  to 12.2 to make sure the git credential helper is wired (safe to re-run), then
+  12.3 for identity.
+- `gh version …` + **`NEEDS_LOGIN`** → `gh` is present but not authenticated →
+  run **12.1**. If `gh` only resolved via the module, tell the user to run
+  `module use /projects/community/modulefiles && module load gh` in the Amarel
+  terminal first so `gh` is on PATH for 12.1.
 - `NO_GH` → GitHub CLI isn't installed. Either `module spider gh` to find a
   module, or fall back to a Personal Access Token with git's `store`/`cache`
   helper (ask me) — then skip to 12.3.
 
 ### 12.1 — Sign in to GitHub (your turn — device flow, no browser on Amarel)
+
+**Only if 12.0 reported `NEEDS_LOGIN`.** If it said `AUTHED`, you're already
+signed in — skip to 12.2.
 
 > **🔒 YOUR TURN:** In the VS Code integrated terminal **on Amarel**, run the
 > command below. `gh` prints a one-time code and a URL — open the URL on your
