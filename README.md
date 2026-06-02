@@ -46,26 +46,30 @@ This repo is meant to be discoverable for:
 Then run `/amarel-vscode-setup`. (If the command doesn't appear yet, run
 `/reload-plugins` or restart the session.)
 
-### Codex, or Claude Code without the marketplace — clone and link
+### Codex (no clone needed)
+
+```
+codex plugin marketplace add solomonsjoseph/amarel-vscode
+```
+
+Then start Codex, run **`/plugins`** → install **amarel-vscode**, and ask:
+*"Set up VS Code Remote-SSH for me on Amarel."* (Type `@` to invoke the bundled skill.)
+
+### Gemini CLI (no clone needed)
+
+```
+gemini extensions install https://github.com/solomonsjoseph/amarel-vscode
+```
+
+Then ask: *"Set up VS Code Remote-SSH for me on Amarel."*
+
+### Cursor, Cline, or any other agent — clone and link
 
 ```bash
 git clone https://github.com/solomonsjoseph/amarel-vscode.git
 cd amarel-vscode
 ./install.sh          # macOS / Linux
 .\install.ps1         # Windows
-```
-
-Restart your session, then:
-
-- **Claude Code:** run `/amarel-vscode-setup`
-- **Codex:** ask — *"Set up VS Code Remote-SSH for me on Amarel."*
-
-### Gemini CLI, Cursor, or Cline
-
-```bash
-git clone https://github.com/solomonsjoseph/amarel-vscode.git
-cd amarel-vscode
-gemini     # — or open this folder in VS Code with Cursor / Cline active
 ```
 
 The tool auto-reads `AGENTS.md` / `GEMINI.md`. Ask:

@@ -31,7 +31,7 @@ install_link() {
 
 install_link "Claude Code" "${REPO_DIR}/skills/${SKILL_NAME}" "${HOME}/.claude/skills" "$SKILL_NAME"
 install_link "Codex" "${REPO_DIR}/skills/${SKILL_NAME}" "${HOME}/.codex/skills" "$SKILL_NAME"
-install_link "Gemini CLI" "$REPO_DIR" "${HOME}/.gemini/config/plugins" "$PLUGIN_NAME"
+install_link "Gemini CLI" "$REPO_DIR" "${HOME}/.gemini/extensions" "$PLUGIN_NAME"
 install_link "Agents" "${REPO_DIR}/skills/${SKILL_NAME}" "${HOME}/.agents/skills" "$SKILL_NAME"
 
 echo ""

@@ -21,7 +21,21 @@ This is not an official Rutgers or OARC project.
 
 Then run `/amarel-vscode-setup`.
 
-**Codex, Gemini, Cursor/Cline, or no LLM — clone and link:**
+**Codex (no clone):**
+
+```
+codex plugin marketplace add solomonsjoseph/amarel-vscode
+```
+
+Then run `/plugins` in the Codex TUI → install **amarel-vscode**.
+
+**Gemini CLI (no clone):**
+
+```
+gemini extensions install https://github.com/solomonsjoseph/amarel-vscode
+```
+
+**Cursor, Cline, or no LLM — clone and link:**
 
 ```bash
 git clone https://github.com/solomonsjoseph/amarel-vscode.git
@@ -35,8 +49,8 @@ On Windows:
 .\install.ps1
 ```
 
-Then use Claude Code with `/amarel-vscode-setup`, ask Codex to set up VS Code
-Remote-SSH for Amarel, or run the scripts directly:
+Then use Claude Code with `/amarel-vscode-setup`, ask Codex/Gemini to set up VS
+Code Remote-SSH for Amarel, or run the scripts directly:
 
 ```bash
 ./scripts/setup.sh

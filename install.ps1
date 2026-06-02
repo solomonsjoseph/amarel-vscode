@@ -44,7 +44,7 @@ $SkillSourceDir = Join-Path $RepoDir "skills\$SkillName"
 
 Install-Link -AgentName 'Claude Code' -SourceDir $SkillSourceDir -ParentDir (Join-Path $env:USERPROFILE '.claude\skills') -Name $SkillName
 Install-Link -AgentName 'Codex' -SourceDir $SkillSourceDir -ParentDir (Join-Path $env:USERPROFILE '.codex\skills') -Name $SkillName
-Install-Link -AgentName 'Gemini CLI' -SourceDir $RepoDir -ParentDir (Join-Path $env:USERPROFILE '.gemini\config\plugins') -Name $PluginName
+Install-Link -AgentName 'Gemini CLI' -SourceDir $RepoDir -ParentDir (Join-Path $env:USERPROFILE '.gemini\extensions') -Name $PluginName
 Install-Link -AgentName 'Agents' -SourceDir $SkillSourceDir -ParentDir (Join-Path $env:USERPROFILE '.agents\skills') -Name $SkillName
 
 Write-Host ""

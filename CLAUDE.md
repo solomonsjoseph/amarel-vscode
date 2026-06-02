@@ -28,10 +28,11 @@ If you edit one runbook file, keep the others in sync. The mirrors are:
 pwsh scripts/setup.ps1                # Windows
 AMAREL_USER=netid ./scripts/setup.sh  # non-interactive username
 
-# Claude Code plugin install (recommended; no clone): in a Claude Code session run
-#   /plugin marketplace add solomonsjoseph/amarel-vscode
-#   /plugin install amarel-vscode@amarel-vscode
-# Install/refresh local agent skill links (symlink path — Codex/Gemini/Agents, and a Claude Code fallback)
+# Per-LLM plugin install (no clone):
+#   Claude Code:  /plugin marketplace add solomonsjoseph/amarel-vscode  then  /plugin install amarel-vscode@amarel-vscode
+#   Codex:        codex plugin marketplace add solomonsjoseph/amarel-vscode   (then the /plugins picker)
+#   Gemini CLI:   gemini extensions install https://github.com/solomonsjoseph/amarel-vscode
+# Install/refresh local agent skill links (symlink path — Cursor/Cline/other agents, and a fallback)
 ./install.sh                          # macOS / Linux
 .\install.ps1                         # Windows
 
@@ -51,6 +52,7 @@ The runtime artifact is a tarball (`vscode-sysroot-x86_64-linux-gnu.tgz`) publis
 - `scripts/build-sysroot.sh` — maintainer pipeline: clones `ursetto/vscode-sysroot` at a pinned commit, builds via Docker (`linux/amd64`), splices in patchelf ≥ 0.18, re-tars, prints SHAs to paste into `checksums.txt`. The `URSETTO_COMMIT` variable should be a pinned SHA before tagging a release.
 - `install.{sh,ps1}` — installs local agent skill links for Claude Code and Codex (`~/.claude/skills/amarel-vscode-setup` and `~/.codex/skills/amarel-vscode-setup`) so `git pull` updates the installed skill.
 - `.claude-plugin/marketplace.json` + `.claude-plugin/plugin.json` — the Claude Code plugin manifests that make the repo installable via `/plugin marketplace add solomonsjoseph/amarel-vscode` then `/plugin install amarel-vscode@amarel-vscode`. The plugin `source` is `"./"` (repo root); the `skills/amarel-vscode-setup/` skill is auto-discovered, so no `skills` key is declared. **`plugin.json` was MOVED here from the repo root — Claude Code reads only `.claude-plugin/plugin.json`, so future manifest edits go here, never to a root `plugin.json`.** Keep `name` (`amarel-vscode`) and `version` identical across both manifests and `PLUGIN_NAME` in `install.{sh,ps1}`. The symlink install path (`install.sh`) remains the supported route for Codex/Gemini/Agents and a Claude Code fallback.
+- `.codex-plugin/plugin.json` + `.agents/plugins/marketplace.json` — the **Codex** plugin + marketplace manifests (`codex plugin marketplace add solomonsjoseph/amarel-vscode`; plugin `source.path` is `"./"`, and `"skills": "./skills/"` makes the same `skills/amarel-vscode-setup/` skill discoverable). `gemini-extension.json` (repo root) — the **Gemini** extension manifest (`gemini extensions install <repo-url>`; GEMINI.md is auto-loaded as context and `skills/` is auto-discovered; Gemini loads from `~/.gemini/extensions`). Codex and Gemini do **not** read `.claude-plugin/*` — each ecosystem needs its own manifest. Validate with `claude plugin validate --strict .`, `gemini extensions validate .`, and a local `codex plugin marketplace add <dir>`.
 
 The release flow (see README "Maintainer notes"): `build-sysroot.sh` → update `checksums.txt` → `gh release create vX.Y.Z …`. `setup.sh` downloads from `releases/latest/download/…`, so a new release becomes default automatically.
 
@@ -66,4 +68,4 @@ A fingerprint mismatch in Phase 2 is a hard stop — possible MITM. Do not work 
 - Phase 0 owns local OS detection. Do not ask the user whether they are on macOS, Linux, or Windows; infer it from context or the Phase 0 output and branch from there.
 - Scripts must remain idempotent. Re-running after any failure is the supported recovery path; don't introduce state that breaks on re-run.
 - "🔒 YOUR TURN" is the convention for any prompt the user must type into (vs. confirmations or info lines). Preserve the marker if you add new interactive steps.
-- The plugin manifests are dual: `.claude-plugin/plugin.json` and the `plugins[0]` entry in `.claude-plugin/marketplace.json` must keep `name`, `version`, and `description` in sync (plugin.json wins silently if they diverge; `claude plugin tag` enforces agreement). Never reintroduce a repo-root `plugin.json` — it is inert for Claude Code and becomes a second source of truth.
+- The repo ships **five** plugin/extension manifests — Claude (`.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json`), Codex (`.codex-plugin/plugin.json` + `.agents/plugins/marketplace.json`), and Gemini (`gemini-extension.json`). Keep `name` (`amarel-vscode`) and `version` identical across all five (and `PLUGIN_NAME` in `install.{sh,ps1}`). Within each ecosystem the plugin manifest wins if it diverges from its marketplace entry (`claude plugin tag` enforces the Claude pair). Never reintroduce a repo-root `plugin.json` — Claude reads only `.claude-plugin/plugin.json`.

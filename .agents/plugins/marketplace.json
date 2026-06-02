@@ -1,0 +1,21 @@
+{
+  "name": "amarel-vscode",
+  "interface": {
+    "displayName": "Amarel VS Code Skill"
+  },
+  "plugins": [
+    {
+      "name": "amarel-vscode",
+      "version": "1.0.0",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
