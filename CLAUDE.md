@@ -28,7 +28,10 @@ If you edit one runbook file, keep the others in sync. The mirrors are:
 pwsh scripts/setup.ps1                # Windows
 AMAREL_USER=netid ./scripts/setup.sh  # non-interactive username
 
-# Install/refresh local agent skill links (Claude Code + Codex)
+# Claude Code plugin install (recommended; no clone): in a Claude Code session run
+#   /plugin marketplace add solomonsjoseph/amarel-vscode
+#   /plugin install amarel-vscode@amarel-vscode
+# Install/refresh local agent skill links (symlink path — Codex/Gemini/Agents, and a Claude Code fallback)
 ./install.sh                          # macOS / Linux
 .\install.ps1                         # Windows
 
@@ -47,6 +50,7 @@ The runtime artifact is a tarball (`vscode-sysroot-x86_64-linux-gnu.tgz`) publis
 - `assets/checksums.txt` — SHA-256 pins for the sysroot tarball + patchelf binary. Phase 6 of `setup.sh` refuses to proceed unless the download matches.
 - `scripts/build-sysroot.sh` — maintainer pipeline: clones `ursetto/vscode-sysroot` at a pinned commit, builds via Docker (`linux/amd64`), splices in patchelf ≥ 0.18, re-tars, prints SHAs to paste into `checksums.txt`. The `URSETTO_COMMIT` variable should be a pinned SHA before tagging a release.
 - `install.{sh,ps1}` — installs local agent skill links for Claude Code and Codex (`~/.claude/skills/amarel-vscode-setup` and `~/.codex/skills/amarel-vscode-setup`) so `git pull` updates the installed skill.
+- `.claude-plugin/marketplace.json` + `.claude-plugin/plugin.json` — the Claude Code plugin manifests that make the repo installable via `/plugin marketplace add solomonsjoseph/amarel-vscode` then `/plugin install amarel-vscode@amarel-vscode`. The plugin `source` is `"./"` (repo root); the `skills/amarel-vscode-setup/` skill is auto-discovered, so no `skills` key is declared. **`plugin.json` was MOVED here from the repo root — Claude Code reads only `.claude-plugin/plugin.json`, so future manifest edits go here, never to a root `plugin.json`.** Keep `name` (`amarel-vscode`) and `version` identical across both manifests and `PLUGIN_NAME` in `install.{sh,ps1}`. The symlink install path (`install.sh`) remains the supported route for Codex/Gemini/Agents and a Claude Code fallback.
 
 The release flow (see README "Maintainer notes"): `build-sysroot.sh` → update `checksums.txt` → `gh release create vX.Y.Z …`. `setup.sh` downloads from `releases/latest/download/…`, so a new release becomes default automatically.
 
@@ -62,3 +66,4 @@ A fingerprint mismatch in Phase 2 is a hard stop — possible MITM. Do not work 
 - Phase 0 owns local OS detection. Do not ask the user whether they are on macOS, Linux, or Windows; infer it from context or the Phase 0 output and branch from there.
 - Scripts must remain idempotent. Re-running after any failure is the supported recovery path; don't introduce state that breaks on re-run.
 - "🔒 YOUR TURN" is the convention for any prompt the user must type into (vs. confirmations or info lines). Preserve the marker if you add new interactive steps.
+- The plugin manifests are dual: `.claude-plugin/plugin.json` and the `plugins[0]` entry in `.claude-plugin/marketplace.json` must keep `name`, `version`, and `description` in sync (plugin.json wins silently if they diverge; `claude plugin tag` enforces agreement). Never reintroduce a repo-root `plugin.json` — it is inert for Claude Code and becomes a second source of truth.

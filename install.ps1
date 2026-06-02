@@ -49,5 +49,9 @@ Install-Link -AgentName 'Agents' -SourceDir $SkillSourceDir -ParentDir (Join-Pat
 
 Write-Host ""
 Write-Host "Restart your agent so it reloads the local skills/plugins."
+Write-Host ""
+Write-Host "Claude Code users can instead install via the plugin marketplace (no clone needed):"
+Write-Host "  /plugin marketplace add solomonsjoseph/amarel-vscode"
+Write-Host "  /plugin install amarel-vscode@amarel-vscode"
 Write-Host "Claude Code command:  /$SkillName"
 Write-Host "Gemini / Codex: ask it to set up VS Code Remote-SSH for Amarel; it will load this skill by name/description."

@@ -49,3 +49,6 @@ If the user asks you to "install this skill" or "install this plugin":
    - **Windows**: Run `powershell -ExecutionPolicy Bypass -File .\install.ps1` in the terminal.
 3. Once completed, inform the user that the skill has been linked to their Gemini config/plugins directory (as well as Claude Code, Codex, etc.).
 
+> Note: the Claude Code `/plugin marketplace add` flow is Claude-Code-specific and
+> does not apply to Gemini — always install via `./install.sh` / `install.ps1` here.
+

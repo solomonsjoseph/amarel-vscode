@@ -12,6 +12,17 @@ This is not an official Rutgers or OARC project.
 
 ## Quick Start
 
+**Claude Code (recommended — no clone):**
+
+```
+/plugin marketplace add solomonsjoseph/amarel-vscode
+/plugin install amarel-vscode@amarel-vscode
+```
+
+Then run `/amarel-vscode-setup`.
+
+**Codex, Gemini, Cursor/Cline, or no LLM — clone and link:**
+
 ```bash
 git clone https://github.com/solomonsjoseph/amarel-vscode.git
 cd amarel-vscode

@@ -36,5 +36,9 @@ install_link "Agents" "${REPO_DIR}/skills/${SKILL_NAME}" "${HOME}/.agents/skills
 
 echo ""
 echo "Restart your agent so it reloads the local skills/plugins."
+echo ""
+echo "Claude Code users can instead install via the plugin marketplace (no clone needed):"
+echo "  /plugin marketplace add solomonsjoseph/amarel-vscode"
+echo "  /plugin install amarel-vscode@amarel-vscode"
 echo "Claude Code command:  /${SKILL_NAME}"
 echo "Gemini / Codex: ask it to set up VS Code Remote-SSH for Amarel; it will load this skill by name/description."
