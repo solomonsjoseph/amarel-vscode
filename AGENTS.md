@@ -1822,12 +1822,72 @@ ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'command -v git; git --version'
 ```
 
 **Success marker:** if this prints `git version 1.8.x` (or anything below 2.5),
-the fix is needed — continue to 11.1. If it already prints `git version 2.5`+
-**and** Source Control already works, skip to Phase 12.
+the fix is likely needed — continue to **11.0.1**, which decides for certain. If it
+already prints `git version 2.5`+ **and** Source Control already works, 11.0.1 will
+confirm you can skip straight to Phase 12.
+
+### 11.0.1 — Already configured and working? (skip-probe — run yourself)
+
+Don't re-apply the fix when it's already in place — and detect the case where IT
+later upgraded Amarel's git so the fix is no longer needed. This runs VS Code's
+exact repo-detection probe (`git rev-parse --git-dir --git-common-dir`, in a clean
+server-like env + throwaway repo) against (1) the `git.path` already in
+`settings.json`, then (2) the server's default git, and reports which:
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+set -uo pipefail
+SETTINGS_FILE="$HOME/.vscode-server/data/Machine/settings.json"
+ge25() { awk -v v="${1:-0.0}" 'BEGIN{split(v,a,"."); exit !(((a[1]+0)>2)||((a[1]+0)==2&&(a[2]+0)>=5))}'; }
+# VS Code's exact repo-detection probe through a given git, in a clean server-like
+# env + throwaway repo. Passes only if that git works AND is >= 2.5.
+probe() {
+  local g="$1" ver repo rc
+  ver="$(env -i PATH=/usr/bin:/bin HOME="$HOME" "$g" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+  ge25 "$ver" || return 1
+  repo="$(mktemp -d "${TMPDIR:-/tmp}/amarel-scm.XXXXXX")"
+  /usr/bin/git init -q "$repo" 2>/dev/null || true
+  ( cd "$repo" && env -i PATH=/usr/bin:/bin HOME="$HOME" "$g" rev-parse --git-dir --git-common-dir ) >/dev/null 2>&1
+  rc=$?; rm -rf "$repo"; return $rc
+}
+# Read the git.path VS Code would use (python3 -> jq -> dependency-free sed).
+GP=""
+if [ -f "$SETTINGS_FILE" ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    GP="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("git.path",""))' "$SETTINGS_FILE" 2>/dev/null)"
+  elif command -v jq >/dev/null 2>&1; then
+    GP="$(jq -r '."git.path" // empty' "$SETTINGS_FILE" 2>/dev/null)"
+  fi
+  [ -n "$GP" ] || GP="$(sed -n 's/.*"git\.path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SETTINGS_FILE" 2>/dev/null | head -n1)"
+fi
+if [ -n "$GP" ] && probe "$GP"; then
+  echo "ALREADY_OK: git.path is set and passes the probe ($GP) — skip 11.1"
+elif probe git; then
+  echo "SYSTEM_GIT_OK: the server's default git is already >= 2.5 and passes — no git.path needed"
+elif [ -n "$GP" ]; then
+  echo "NEEDS_FIX: git.path is set ($GP) but no longer passes (module moved/updated?) — run 11.1"
+else
+  echo "NEEDS_FIX: no working modern git configured — run 11.1"
+fi
+REMOTE
+```
+
+Routing:
+
+- `ALREADY_OK` → the configured `git.path` already satisfies VS Code's probe — the
+  "present git is already good enough → skip" case, **including after an IT git
+  update that your config still clears**. **Skip 11.1**; go to **11.2**'s live
+  confirm (the automated check already passed here), or on to Phase 12.
+- `SYSTEM_GIT_OK` → IT upgraded Amarel's *default* git to ≥ 2.5, so no `git.path`
+  override is needed at all → **skip the whole fix → Phase 12**.
+- `NEEDS_FIX` → nothing is configured yet, **or** a previously-working `git.path`
+  stopped passing (e.g. IT retired the exact module build) → **run 11.1** to
+  (re)detect and write it.
 
 ### 11.1 — Detect a modern git and write `git.path` (run yourself)
 
-One idempotent remote block: it initialises Lmod in the non-interactive shell,
+**Run this only when 11.0.1 reported `NEEDS_FIX`.** One idempotent remote block: it initialises Lmod in the non-interactive shell,
 adds Amarel's community module tree (`/projects/community/modulefiles`, where the
 git modules actually live), and loads a modern `git` module. It then **prefers the
 modern git's absolute path**: if that binary runs standalone in a **clean,
