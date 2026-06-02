@@ -492,18 +492,37 @@ if command -v module >/dev/null 2>&1; then
 fi
 MODERN_GIT="$(command -v git 2>/dev/null || true)"
 MODERN_VER="$([ -n "$MODERN_GIT" ] && "$MODERN_GIT" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+# Version when the modern git runs in a CLEAN, server-like env (no Lmod, no
+# module libs) -- exactly how VS Code Server invokes it. Empty/old here means the
+# binary needs its module environment to run.
+CLEAN_VER="$([ -n "$MODERN_GIT" ] && env -i PATH=/usr/bin:/bin HOME="$HOME" "$MODERN_GIT" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
 
 mkdir -p "$VSROOT"
-cat > "$WRAPPER" <<'WRAP'
+if [ -n "$MODERN_GIT" ] && ge25 "$CLEAN_VER"; then
+  # Best case (true on Amarel): the modern git is self-sufficient -- runs
+  # standalone with no module libraries -- so point git.path straight at the
+  # binary. No per-call Lmod cost, and it can NEVER silently fall back to the
+  # stock git if a future module load fails (a missing binary fails loudly).
+  rm -f "$WRAPPER"
+  GITPATH="$MODERN_GIT"
+  CHOSEN="absolute path $MODERN_GIT -> git $MODERN_VER (runs standalone; no wrapper needed)"
+elif [ -n "$MODERN_GIT" ] && ge25 "$MODERN_VER"; then
+  # The modern git works only with its module environment (it needs libraries the
+  # module provides -- CLEAN_VER came back empty/old). Write a wrapper that
+  # re-creates that env, then execs the modern git by its ABSOLUTE path (never a
+  # bare `git`), so a failed module load still can't resolve to stock 1.8.3.1.
+  cat > "$WRAPPER" <<WRAP
 #!/usr/bin/env bash
-# Written by amarel-vscode. VS Code Server calls this as git.path, in a
-# non-interactive context where Lmod is not initialised -- so initialise it,
-# load a modern git, then hand off. Keep stdout clean: only git may write to
-# it, or VS Code mis-parses git's output (some Lmod sites log to stdout).
+# Written by amarel-vscode. VS Code Server calls this as git.path in a
+# non-interactive context where Lmod is not initialised. Set up the module
+# environment (this git needs its module libraries), then exec the modern git by
+# ABSOLUTE path -- never bare 'git', so a failed module load can't make VS Code
+# silently fall back to the CentOS 7 stock git (1.8.3.1). Keep stdout clean:
+# only git may write to it (some Lmod sites log to stdout).
 {
   if ! command -v module >/dev/null 2>&1; then
     for i in /etc/profile.d/lmod.sh /etc/profile.d/modules.sh /usr/share/lmod/lmod/init/bash; do
-      [ -f "$i" ] && . "$i" 2>/dev/null && break
+      [ -f "\$i" ] && . "\$i" 2>/dev/null && break
     done
   fi
   if command -v module >/dev/null 2>&1; then
@@ -511,15 +530,19 @@ cat > "$WRAPPER" <<'WRAP'
     module load git 2>/dev/null
   fi
 } >/dev/null 2>&1
-exec git "$@"
+exec "${MODERN_GIT}" "\$@"
 WRAP
-chmod +x "$WRAPPER"
-WRAP_VER="$(env -i PATH=/usr/bin:/bin HOME="$HOME" bash "$WRAPPER" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
-
-if ge25 "$WRAP_VER"; then
-  GITPATH="$WRAPPER"; CHOSEN="wrapper (module load git) -> git $WRAP_VER"
-elif [ -n "$MODERN_GIT" ] && ge25 "$MODERN_VER"; then
-  rm -f "$WRAPPER"; GITPATH="$MODERN_GIT"; CHOSEN="absolute path $MODERN_GIT -> git $MODERN_VER"
+  chmod +x "$WRAPPER"
+  WRAP_VER="$(env -i PATH=/usr/bin:/bin HOME="$HOME" bash "$WRAPPER" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+  if ge25 "$WRAP_VER"; then
+    GITPATH="$WRAPPER"; CHOSEN="wrapper (module env) -> git $WRAP_VER [binary needs module libs]"
+  else
+    rm -f "$WRAPPER"
+    echo "NO_MODERN_GIT" >&2
+    echo "Found git $MODERN_VER but it would not run via the module wrapper in a clean env." >&2
+    echo "Run 'module use /projects/community/modulefiles && module spider git' on Amarel, then set git.path manually." >&2
+    exit 3
+  fi
 else
   rm -f "$WRAPPER"
   echo "NO_MODERN_GIT" >&2

@@ -62,43 +62,59 @@ the **remote** Machine settings — the same file Phase 9 already edits:
 `git.path` is `"scope": "machine"`, so it must be set in the Remote/Machine
 settings (not your local user settings), and it always wins over PATH.
 
-### Wrapper vs. absolute path
+### Wrapper vs. absolute path (prefer the absolute path)
 
-Because the server runs git **non-interactively** (no Lmod), the robust form is a
-tiny wrapper that re-creates the module environment, then runs git:
+The server runs git **non-interactively** (no Lmod), so `git.path` must resolve to
+a modern git without an interactive shell. Two ways do that, and the **absolute
+path is preferred**:
 
-```bash
-#!/usr/bin/env bash
-# ~/.vscode-server/git-modern.sh
-if ! command -v module >/dev/null 2>&1; then
-  for i in /etc/profile.d/lmod.sh /etc/profile.d/modules.sh /usr/share/lmod/lmod/init/bash; do
-    [ -f "$i" ] && . "$i" 2>/dev/null && break
-  done
-fi
-if command -v module >/dev/null 2>&1; then
-  # Amarel's git modules are in the community tree, not the default MODULEPATH.
-  [ -d /projects/community/modulefiles ] && module use /projects/community/modulefiles 2>/dev/null
-  module load git 2>/dev/null
-fi
-exec git "$@"
-```
+- **Absolute path (best — and what Amarel needs).** If the modern git runs
+  *standalone* — it works in a clean, server-like environment with no
+  module-provided libraries (verify with `ldd "$(command -v git)"`: every line
+  resolves to `/lib64`, `/usr/lib64`, or vDSO) — point `git.path` straight at the
+  binary, e.g. `/projects/community/git/2.35.1/ez82/bin/git`. No per-call Lmod
+  cost, and it **cannot silently regress**: if the binary ever disappears, VS Code
+  reports `git not found` (loud) instead of quietly using the stock git.
+- **Wrapper (only when the binary needs module libraries).** If `ldd` shows
+  dependencies under `/opt`, `/projects`, `/home`, … (or `not found`), the binary
+  can't run without its module environment, so wrap it:
 
-Point `git.path` at that wrapper. Use a **bare absolute path** instead only when
-the modern git has **no** module-provided library dependencies (check with
-`ldd`). If the binary links against libraries under `/opt`, `/projects`, etc.,
-the wrapper is required — an absolute path without the module env would fail at
-runtime.
+  ```bash
+  #!/usr/bin/env bash
+  # ~/.vscode-server/git-modern.sh
+  {
+    if ! command -v module >/dev/null 2>&1; then
+      for i in /etc/profile.d/lmod.sh /etc/profile.d/modules.sh /usr/share/lmod/lmod/init/bash; do
+        [ -f "$i" ] && . "$i" 2>/dev/null && break
+      done
+    fi
+    if command -v module >/dev/null 2>&1; then
+      # Amarel's git modules are in the community tree, not the default MODULEPATH.
+      [ -d /projects/community/modulefiles ] && module use /projects/community/modulefiles 2>/dev/null
+      module load git 2>/dev/null
+    fi
+  } >/dev/null 2>&1
+  exec /abs/path/to/modern/git "$@"   # absolute path, NOT bare `git`
+  ```
 
-The skill (Phase 11 / `setup.sh` Phase 9.5) automates this: it writes the
-wrapper, verifies it yields git ≥ 2.5 in a **clean** environment, and falls back
-to the absolute path only when that is safe.
+  The last line execs the **absolute path**, not a bare `git`. A wrapper that ends
+  in `exec git` will — if `module load` ever fails at runtime — silently resolve
+  `git` from `PATH` to CentOS 7's stock `/usr/bin/git` (1.8.3.1), and Source
+  Control breaks again with **no error**. Exec'ing the absolute path fails loudly
+  instead.
 
-Resulting `settings.json` (other keys preserved):
+The skill (Phase 11 / `setup.sh` Phase 9.5) automates exactly this: it loads a
+modern git module, tests whether the binary runs in a **clean** environment, and
+sets `git.path` to the bare binary when it does (the Amarel case) — otherwise it
+writes the wrapper (exec'ing the absolute path) and verifies it yields git ≥ 2.5
+in a clean environment. If neither works it stops with `NO_MODERN_GIT`.
+
+Resulting `settings.json` on Amarel (absolute path chosen; other keys preserved):
 
 ```json
 {
     "extensions.verifySignature": false,
-    "git.path": "/home/<netid>/.vscode-server/git-modern.sh"
+    "git.path": "/projects/community/git/2.35.1/ez82/bin/git"
 }
 ```
 
@@ -151,10 +167,21 @@ BROWSER= gh auth login --hostname github.com --git-protocol https
 # Wire gh as git's credential helper (must run AFTER login)
 gh auth setup-git
 
-# Identity — use your GitHub no-reply address (github.com/settings/emails)
+# Identity — see the email note below; the no-reply address is the safe default
 git config --global user.name "Your Name"
 git config --global user.email "12345678+yourname@users.noreply.github.com"
 ```
+
+**Which email?** It depends on your GitHub account — not everyone has email
+privacy on:
+
+- **Email privacy ON** (GitHub → Settings → Emails → *"Keep my email address
+  private"*): you **must** use your GitHub **no-reply** address
+  (`12345678+yourname@users.noreply.github.com`, shown on that page) or every push
+  is rejected with **GH007**.
+- **Email privacy OFF:** you *may* use your real email, but the no-reply address
+  still works and keeps your email out of public commit history — so it's the safe
+  default either way.
 
 ### GH007: push rejected — private email protection
 
@@ -179,9 +206,10 @@ For multiple bad commits, use `git rebase -i` (re-stamp each) or `git filter-rep
 | Pitfall | What happens | Fix |
 |---|---|---|
 | Editing `~/.bashrc` / `~/.bash_profile` to "fix" git | VS Code Server may not pick it up in its non-interactive context | Use the machine-scoped `git.path` setting |
-| Using a module git's absolute path without checking `ldd` | Runtime failure / silent breakage when module libs aren't loaded | Run `ldd`; use the wrapper if any non-system libs |
+| Using a module git's absolute path without checking `ldd` | Runtime failure / silent breakage when module libs aren't loaded | Run `ldd`; use the wrapper only if any non-system libs |
+| Wrapper ending in `exec git` (not the absolute path) | If `module load` fails at runtime, `git` resolves from `PATH` to stock 1.8.3.1 → Source Control silently breaks again | Exec the modern git's **absolute path** in the wrapper (the skill does this automatically) |
 | Setting `git.path` in **local** user settings | Ignored for the remote — it's machine-scoped | Set it in the **Remote [SSH]** / Machine settings |
 | `gh auth setup-git` before `gh auth login` | "not logged into any GitHub hosts" | Log in first, then `setup-git` |
-| Private email in `user.email` | `GH007` on push | Use the GitHub no-reply address |
+| Private email in `user.email` **while GitHub email privacy is ON** | `GH007` on push | Use the GitHub no-reply address (works whether or not privacy is on) |
 | VS Code Server upgrade clears settings | Source Control breaks again | Re-run the skill from Phase 11 (idempotent) |
 | Fresh start (`reset.sh full` / the skill's "fresh start" offer) | Removes the `git-modern.sh` wrapper **and** strips the `git.path` + `extensions.verifySignature` keys, returning `settings.json` to its pre-skill state (user-added keys kept) | Intentional — re-running the skill (Phase 11) rebuilds it; this is what makes a clean re-test possible |

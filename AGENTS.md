@@ -38,6 +38,7 @@ optionally wires up GitHub auth + identity.
 > 2. All `[EXEC]` steps are noninteractive: SSH/SCP calls use `-o BatchMode=yes`; no interactive prompts are expected. **Key-auth denial scope (Phases 1–5):** before the key is loaded into the agent (Phase 4.1), the **skip probes** (Phase 1.0 Gate-1 and Phase 3.0) return `Permission denied (publickey,…)` *by construction* — this is an **expected routing signal**, not a failure (Phase 1.0 silences this probe's stderr; only its exit code routes SKIP/PROCEED). Treat an auth failure as a hard failure to escalate only (a) on any `[EXEC]` step in Phases 6–12, or (b) in Phases 1–5 if a denial persists **after** Phase 4.2 confirms the key is loaded (e.g. the Phase 4.2.1 dedupe should succeed once the key is loaded). Never re-run a `[TTY]` password/passphrase step (e.g. Phase 3.1) in response to an expected pre-load denial. Any *non-auth* error (network, missing tool, unexpected output) is always surfaced.
 > 3. Key state discovered during execution (`LOCAL_OS`, `NetID`, `REPO_ROOT`, `USE_TARBALL`) is recorded at the phase that first establishes it and reused in all subsequent phases without re-deriving.
 > 4. **Host lock:** The only target is `amarel.rutgers.edu`. Do not substitute any other hostname — not `amarel2.rutgers.edu`, not any other `*.rutgers.edu` host. Every `<NetID>@amarel.rutgers.edu` in this skill is a literal target, not a template.
+> 5. **Verify; never take "done" on faith.** When a step hands off to the user (a `[TTY]` command, a GUI action, a `fresh` reset, a `gh` login) and they reply "done", run a read-only probe to confirm the *actual* outcome **before you advance or ask the next question** — the user saying it worked is not proof it worked. And before running any step, probe whether its outcome is already in place: if it is, **skip** it (a resume); if stale residue from a prior run remains where a `fresh` start should have cleaned it, **remove it first**. The skip-probes (Phases 1, 3, 4, 7, 9, 11, 12) already embody this — extend the same discipline to every hand-off, including the reset and the GitHub steps that historically advanced on the user's word alone.
 
 **Two entry modes — decide before Phase 0.**
 - **Full setup** (first-time VS Code-on-Amarel): run Phases 0 → 12 in order.
@@ -157,6 +158,31 @@ within a single login session. A reboot-spanning guarantee requires persistent
 keyring autostart that the skill cannot configure — the skill points the user
 at their distro docs and continues.
 
+### The 60-second map — orient the user before Phase 0 (print this)
+
+New users don't know what's ahead, so before Phase 0 print this plain-English
+map of the whole journey. Keep narrating as you go (each phase already prints a
+one-line description), but this is the orientation that makes the rest make sense:
+
+> **Here's the whole setup, start to finish — so you can follow along:**
+> 1. **Keys (Phases 1–5)** — we create an SSH key just for Amarel and install it,
+>    so you stop typing your Amarel password. You'll touch the terminal about 4
+>    times (one extra on Windows): set a key passphrase, type your Amarel password
+>    **once** (your last time ever), do a test login, and save the passphrase to
+>    your keychain.
+> 2. **The GLIBC fix (Phases 6–8)** — I download a small "sysroot" (a newer glibc
+>    bundle) into your Amarel home and point VS Code Server at it. This is what
+>    clears the `GLIBC >= 2.28` error. I run all of this for you.
+> 3. **Connect (Phases 9–10)** — I flip one VS Code setting on Amarel, then you
+>    connect from VS Code's **Remote-SSH** menu.
+> 4. **Git & GitHub (Phases 11–12, optional)** — if you'll use Source Control, I
+>    point VS Code at a modern git on Amarel; Phase 12 wires up GitHub if you push
+>    from Amarel.
+>
+> You don't need to understand each command — before every step I'll tell you what
+> it does and what success looks like, and **I check the result myself before
+> moving on**, so you can't get silently stuck.
+
 ### Heads-up: your terminal moments
 
 Tell the user up front (I run everything else myself via Bash). You will switch
@@ -218,32 +244,82 @@ nothing below will work without it.
 
 **Record `LOCAL_OS` from the OS line, then ask the user for their NetID and advance.**
 
-### 0.1 — Fresh start or resume? (ask the user)
+### 0.1 — Fresh start or resume? (ask the user — explain it, don't just ask)
 
 Existing state from a previous run — an installed key, a deployed sysroot,
-merged settings — makes the skip-probes in Phases 1, 3, 4, 7, and 9 fire, so the
-skill fast-forwards and can report success **without re-exercising those steps**.
-That is the right behaviour for a normal resume, but it hides problems when
-something has drifted: you changed your Amarel password, rotated keys, or a
-prior run only half-finished. Offer the choice **before any setup work**:
+merged settings — makes the skip-probes in Phases 1, 3, 4, 7, 9, and 11 fire, so
+the skill fast-forwards and can report success **without re-exercising those
+steps**. That is the right behaviour for a normal resume, but it hides problems
+when something has drifted: you changed your Amarel password, rotated keys, or a
+prior run only half-finished. A new user has **no context to choose blindly** and
+will often just pick `resume` — so spell out both choices in plain language
+**before any setup work**, then offer:
 
 > **🔒 YOUR TURN — fresh start or resume?**
-> - Reply **`resume`** (default) to keep whatever is already set up — fastest,
->   skips anything already done.
-> - Reply **`fresh`** to wipe what this skill created and run every phase from
->   scratch. Pick this if you changed your Amarel password, want to re-key, or
->   just want a clean verification run.
+>
+> **First time setting this up on this computer?** There's nothing yet to wipe,
+> so **`resume`** is the right answer — it simply runs every step from the
+> beginning (there's just nothing to skip). You'd get the same result from
+> `fresh`, only after a no-op cleanup.
+>
+> **Done this before, or a previous attempt half-finished?**
+> - **`resume`** — keep what's already set up and skip what's already done.
+>   Fastest. Pick this to continue a setup, or to fix one specific thing.
+> - **`fresh`** — wipe everything this skill created (your local Amarel key, the
+>   sysroot on Amarel, and the skill's settings) and rebuild from scratch. Pick
+>   this if you changed your Amarel password, want to re-key, a prior run left
+>   things broken, or you want a guaranteed-clean verification run.
+>
+> Not sure? **`resume` is the safe default** — the skill detects what's missing
+> and fills only the gaps; it won't redo or break anything already working.
 
 **If the user chose `fresh`:** run the **`full`** reset from the `## Fresh start`
 section now — it removes the skill's `ssh_config` / `known_hosts` / `~/.zshrc`
 entries, deletes the local `id_ed25519_amarel` key pair, and wipes everything the
 skill deployed on Amarel (the `authorized_keys` line, the extracted
-`~/.vscode-server/sysroot` + `sysroot.sh`, and the `~/.bashrc` loader block), so
-**every** phase (1–9) re-runs from scratch. It never touches any other SSH host
-or key. Then begin at Phase 1.
+`~/.vscode-server/sysroot` + `sysroot.sh`, the `~/.bashrc` loader block, and the
+Phase 11 `git-modern.sh` wrapper + `git.path`/`extensions.verifySignature`
+settings), so **every** phase (1–11) re-runs from scratch. It never touches any
+other SSH host or key.
+
+**Then verify the reset actually cleaned up before starting Phase 1 — don't take
+"done" on faith.** The Amarel-side wipe is best-effort (it's skipped if key auth
+was already broken), so confirm the local artifacts are gone and tell the user
+plainly what, if anything, the reset could not reach:
+
+**macOS/Linux — run yourself:**
+
+[VERIFY]
+```bash
+echo "Post-reset cleanliness check:"
+test -f ~/.ssh/id_ed25519_amarel && echo "  ✗ local key pair still present" || echo "  ✓ local key pair removed"
+ssh -G amarel.rutgers.edu 2>/dev/null | grep -qE '^identityfile.*id_ed25519_amarel' && echo "  ✗ ssh_config amarel block still present" || echo "  ✓ ssh_config amarel block removed"
+grep -qE '^amarel\.rutgers\.edu ' ~/.ssh/known_hosts 2>/dev/null && echo "  ✗ known_hosts amarel entry still present" || echo "  ✓ known_hosts amarel entry removed"
+grep -q 'id_ed25519_amarel' ~/.zshrc 2>/dev/null && echo "  ✗ ~/.zshrc loader still present" || echo "  ✓ ~/.zshrc loader removed"
+```
+
+**Windows PowerShell — run yourself:**
+
+[VERIFY]
+```powershell
+"Post-reset cleanliness check:"
+if (Test-Path "$HOME\.ssh\id_ed25519_amarel") { "  ✗ local key pair still present" } else { "  ✓ local key pair removed" }
+if ((ssh -G amarel.rutgers.edu 2>$null) -match 'identityfile.*id_ed25519_amarel') { "  ✗ ssh_config amarel block still present" } else { "  ✓ ssh_config amarel block removed" }
+if ((Get-Content "$HOME\.ssh\known_hosts" -ErrorAction SilentlyContinue) -match '^amarel\.rutgers\.edu ') { "  ✗ known_hosts amarel entry still present" } else { "  ✓ known_hosts amarel entry removed" }
+```
+
+- **All `✓`** → the local side is clean; begin Phase 1.
+- **Any `✗`** → the reset didn't fully apply; re-run it (it's idempotent) before continuing.
+- **Amarel-side residue:** if the reset printed `• Skipped Amarel cleanup …`, key
+  auth was already gone, so the old key line, sysroot, and any earlier
+  `git.path` / `git-modern.sh` may still be on Amarel. That's fine — Phases 3, 7,
+  and 11 overwrite them — but **say so explicitly** rather than implying a
+  spotless cluster, so the user isn't surprised when those phases run.
 
 **If the user chose `resume` (or didn't answer):** continue to Phase 1 — the
-skip-probes handle the rest.
+skip-probes handle the rest. (Skip-probes *skip what is already correctly in
+place*; they do **not** scrub stale residue — that is exactly what `fresh` is
+for, so don't reach for a resume when the user actually needs a clean slate.)
 
 ### 0.2 — Targeted-repair fast path (already connected → Source Control / GitHub)
 
@@ -1753,13 +1829,18 @@ the fix is needed — continue to 11.1. If it already prints `git version 2.5`+
 
 One idempotent remote block: it initialises Lmod in the non-interactive shell,
 adds Amarel's community module tree (`/projects/community/modulefiles`, where the
-git modules actually live), loads a modern `git` module, writes a small wrapper at
-`~/.vscode-server/git-modern.sh` that reproduces that module environment (so VS
-Code — which also spawns git non-interactively — gets the same modern git),
-verifies the wrapper yields git ≥ 2.5 in a **clean** (server-like) environment,
-then merges `"git.path"` into `~/.vscode-server/data/Machine/settings.json`
-(preserving `extensions.verifySignature` and every other key). If no module git
-exists it falls back to an absolute modern-git path, or stops with `NO_MODERN_GIT`.
+git modules actually live), and loads a modern `git` module. It then **prefers the
+modern git's absolute path**: if that binary runs standalone in a **clean,
+server-like environment** (no module libraries needed — true on Amarel), it points
+`git.path` straight at the binary — fastest, and it can **never silently fall back
+to the stock git** the way a `module load; exec git` wrapper can. Only if the
+binary needs its module environment to run does it write the
+`~/.vscode-server/git-modern.sh` wrapper (which re-creates that environment, then
+execs the modern git **by absolute path** — never a bare `git` — so a failed
+module load still can't resolve to CentOS 7's git 1.8.3.1). Either way it merges
+`"git.path"` into `~/.vscode-server/data/Machine/settings.json` (preserving
+`extensions.verifySignature` and every other key). If no git ≥ 2.5 can be found at
+all, it stops with `NO_MODERN_GIT`.
 
 [EXEC]
 ```bash
@@ -1788,19 +1869,38 @@ if command -v module >/dev/null 2>&1; then
 fi
 MODERN_GIT="$(command -v git 2>/dev/null || true)"
 MODERN_VER="$([ -n "$MODERN_GIT" ] && "$MODERN_GIT" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+# Version when the modern git runs in a CLEAN, server-like env (no Lmod, no
+# module libs) -- exactly how VS Code Server invokes it. Empty/old here means the
+# binary needs its module environment to run.
+CLEAN_VER="$([ -n "$MODERN_GIT" ] && env -i PATH=/usr/bin:/bin HOME="$HOME" "$MODERN_GIT" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
 
 mkdir -p "$VSROOT"
-# Wrapper that re-creates the module env every time VS Code calls git.
-cat > "$WRAPPER" <<'WRAP'
+if [ -n "$MODERN_GIT" ] && ge25 "$CLEAN_VER"; then
+  # Best case (true on Amarel): the modern git is self-sufficient -- it runs
+  # standalone with no module libraries -- so point git.path straight at the
+  # binary. No per-call Lmod cost, and (unlike a `module load; exec git` wrapper)
+  # it can NEVER silently fall back to the stock git if a future module load
+  # fails -- a missing binary fails loudly instead.
+  rm -f "$WRAPPER"
+  GITPATH="$MODERN_GIT"
+  CHOSEN="absolute path $MODERN_GIT -> git $MODERN_VER (runs standalone; no wrapper needed)"
+elif [ -n "$MODERN_GIT" ] && ge25 "$MODERN_VER"; then
+  # The modern git works only with its module environment (it needs libraries the
+  # module provides -- CLEAN_VER came back empty/old). Write a wrapper that
+  # re-creates that env, then execs the modern git by its ABSOLUTE path (never a
+  # bare `git`), so a failed module load still can't resolve to stock 1.8.3.1.
+  cat > "$WRAPPER" <<WRAP
 #!/usr/bin/env bash
-# Written by amarel-vscode. VS Code Server calls this as git.path, in a
-# non-interactive context where Lmod is not initialised -- so initialise it,
-# load a modern git, then hand off. Keep stdout clean: only git may write to
-# it, or VS Code mis-parses git's output (some Lmod sites log to stdout).
+# Written by amarel-vscode. VS Code Server calls this as git.path in a
+# non-interactive context where Lmod is not initialised. Set up the module
+# environment (this git needs its module libraries), then exec the modern git by
+# ABSOLUTE path -- never bare 'git', so a failed module load can't make VS Code
+# silently fall back to the CentOS 7 stock git (1.8.3.1). Keep stdout clean:
+# only git may write to it (some Lmod sites log to stdout).
 {
   if ! command -v module >/dev/null 2>&1; then
     for i in /etc/profile.d/lmod.sh /etc/profile.d/modules.sh /usr/share/lmod/lmod/init/bash; do
-      [ -f "$i" ] && . "$i" 2>/dev/null && break
+      [ -f "\$i" ] && . "\$i" 2>/dev/null && break
     done
   fi
   if command -v module >/dev/null 2>&1; then
@@ -1808,15 +1908,19 @@ cat > "$WRAPPER" <<'WRAP'
     module load git 2>/dev/null
   fi
 } >/dev/null 2>&1
-exec git "$@"
+exec "${MODERN_GIT}" "\$@"
 WRAP
-chmod +x "$WRAPPER"
-WRAP_VER="$(env -i PATH=/usr/bin:/bin HOME="$HOME" bash "$WRAPPER" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
-
-if ge25 "$WRAP_VER"; then
-  GITPATH="$WRAPPER"; CHOSEN="wrapper (module load git) -> git $WRAP_VER"
-elif [ -n "$MODERN_GIT" ] && ge25 "$MODERN_VER"; then
-  rm -f "$WRAPPER"; GITPATH="$MODERN_GIT"; CHOSEN="absolute path $MODERN_GIT -> git $MODERN_VER"
+  chmod +x "$WRAPPER"
+  WRAP_VER="$(env -i PATH=/usr/bin:/bin HOME="$HOME" bash "$WRAPPER" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+  if ge25 "$WRAP_VER"; then
+    GITPATH="$WRAPPER"; CHOSEN="wrapper (module env) -> git $WRAP_VER [binary needs module libs]"
+  else
+    rm -f "$WRAPPER"
+    echo "NO_MODERN_GIT" >&2
+    echo "Found git $MODERN_VER but it would not run via the module wrapper in a clean env." >&2
+    echo "Run 'module use /projects/community/modulefiles && module spider git' on Amarel, then set git.path manually (Phase 11.3)." >&2
+    exit 3
+  fi
 else
   rm -f "$WRAPPER"
   echo "NO_MODERN_GIT" >&2
@@ -2007,10 +2111,33 @@ signed in — skip to 12.2.
 BROWSER= gh auth login --hostname github.com --git-protocol https
 ```
 
-Choose **HTTPS** and **Login with a web browser** when prompted. Tell me when
-`gh auth status` shows you're logged in.
+Choose **HTTPS** and **Login with a web browser** when prompted.
 
-### 12.2 — Wire `gh` as git's credential helper (your turn)
+**When the user says they finished the device flow, verify it yourself before
+advancing — don't take "done" on faith. Re-run the 12.0 probe (it reads only
+login state, never the token):**
+
+[VERIFY]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'command -v gh >/dev/null 2>&1 || { for i in /etc/profile.d/modules.sh /etc/profile.d/lmod.sh /usr/share/lmod/lmod/init/bash; do [ -f "$i" ] && . "$i" 2>/dev/null && break; done; command -v module >/dev/null 2>&1 && { module use /projects/community/modulefiles 2>/dev/null; module load gh 2>/dev/null; }; }; gh auth status >/dev/null 2>&1 && echo AUTHED || echo NEEDS_LOGIN'
+```
+
+- `AUTHED` → login worked; advance to 12.2.
+- `NEEDS_LOGIN` → the device flow didn't complete (or `gh` resolved only via the
+  module — then tell them to run `module use /projects/community/modulefiles && module load gh`
+  in the Amarel terminal first); have them re-run 12.1, then re-probe.
+
+### 12.2 — Wire `gh` as git's credential helper
+
+**Skip-probe first (run yourself — is it already wired? don't re-ask on a resume):**
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'git config --global --get-regexp "^credential\." 2>/dev/null | grep -qi "gh auth git-credential" && echo "ALREADY_WIRED — skip 12.2" || echo "NEEDS_SETUP_GIT"'
+```
+
+`ALREADY_WIRED` → the credential helper is already in place; skip to 12.3.
+`NEEDS_SETUP_GIT` → hand the user the command below.
 
 > **🔒 YOUR TURN:** still in the Amarel terminal — copy this. It must run
 > **after** 12.1; it scopes the credential helper to `github.com` only.
@@ -2020,11 +2147,38 @@ Choose **HTTPS** and **Login with a web browser** when prompted. Tell me when
 gh auth setup-git
 ```
 
-### 12.3 — Set your git identity (your turn)
+**After they say done, verify the helper is wired (run yourself — reads only the helper *command*, never a token):**
 
-Find your GitHub no-reply address at <https://github.com/settings/emails> — it
-looks like `12345678+yourname@users.noreply.github.com`. Then set your name and
-that email (substitute your details):
+[VERIFY]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'git config --global --get-regexp "^credential\." 2>/dev/null | grep -qi "gh auth git-credential" && echo "✓ gh wired as git credential helper" || echo "✗ helper not set — re-run 12.2 (it must run after a successful 12.1)"'
+```
+
+### 12.3 — Set your git identity
+
+**Skip-probe first (run yourself — is the identity already set? don't re-ask on a resume):**
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'n=$(git config --global user.name); e=$(git config --global user.email); if [ -n "$n" ] && [ -n "$e" ]; then case "$e" in *@users.noreply.github.com) echo "ALREADY_SET: $n <$e> — skip 12.3";; *) echo "SET_BUT_CHECK: $n <$e> — set, but NOT a no-reply address";; esac; else echo "NEEDS_IDENTITY"; fi'
+```
+
+- `ALREADY_SET …` → name + email are set and the email is a no-reply address; skip to 12.4 (or finish).
+- `SET_BUT_CHECK …` → identity is set but the email isn't a no-reply address. Fine **if** GitHub email privacy is off; if it's on, pushes will hit **GH007**. Show the user the current value and let them decide whether to update it with the commands below.
+- `NEEDS_IDENTITY` → not set; continue below.
+
+Git needs a name + email to stamp commits. **Which email depends on your GitHub
+account — not every user has email privacy on, so pick the case that fits:**
+
+- **Email privacy ON** (GitHub → Settings → Emails → *"Keep my email address
+  private"* is checked): you **must** use your GitHub **no-reply** address, or
+  every push is rejected with **GH007** (12.4). It's shown on that same Emails
+  page and looks like `12345678+yourname@users.noreply.github.com`.
+- **Email privacy OFF:** you *may* use your real email — but the no-reply address
+  still works and keeps your email out of public commit history, so it's the safe
+  default either way.
+
+**Recommended (works for everyone):** set your name and your no-reply address:
 
 [TTY]
 ```bash
@@ -2036,8 +2190,18 @@ git config --global user.name "Your Name"
 git config --global user.email "12345678+yourname@users.noreply.github.com"
 ```
 
-> Use the **no-reply** address. If "Keep my email address private" is enabled on
-> GitHub, any push carrying a private address is rejected with **GH007** (12.4).
+Prefer your real email and you've confirmed privacy is OFF? Substitute it in the
+second command — just know that turning privacy ON later will start rejecting
+pushes until you switch to no-reply.
+
+**After the user says they're done, verify the identity is set and flag any GH007
+risk (run yourself). The email is stamped into every public commit — it is not a
+secret — so reading it back is fine; unlike tokens, which the skill never reads:**
+
+[VERIFY]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'n=$(git config --global user.name); e=$(git config --global user.email); if [ -n "$n" ] && [ -n "$e" ]; then echo "✓ identity: $n <$e>"; case "$e" in *@users.noreply.github.com) echo "  (no-reply — safe whether or not email privacy is on)";; *) echo "  ⚠ not a no-reply address — if GitHub email privacy is ON, pushes will hit GH007 (see 12.4); switch to your no-reply address if so";; esac; else echo "✗ identity incomplete — re-run 12.3"; fi'
+```
 
 ### 12.4 — If a push is rejected with `GH007` (private email)
 

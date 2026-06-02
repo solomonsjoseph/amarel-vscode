@@ -29,6 +29,12 @@ Amarel" or "fix the Remote-SSH GLIBC error":
    ("just run it for me") — see the *Power-user path* in `AGENTS.md`.
 5. The user types all secrets (Amarel password in Phase 3, key passphrase in
    Phases 1 & 4) into the OS terminal. You never see those.
+6. **Verify, don't trust "done".** When the user says a manual step finished (a
+   `fresh` reset, the Phase 3 login, the Phase 12 `gh` login / identity), confirm
+   it with a quick read-only probe **before advancing or asking the next
+   question** — don't take "done" as proof. And skip steps already in place
+   (resume) while cleaning stale residue on a fresh start. See `AGENTS.md`
+   execution-contract point 5.
 
 **Security: you must not** read `~/.ssh/id_*` private keys, invoke `sshpass`/
 `expect`, query OS keychains, or weaken `BatchMode=yes` constraints. See
