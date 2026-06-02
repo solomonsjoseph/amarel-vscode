@@ -31,7 +31,7 @@ AMAREL_USER=netid ./scripts/setup.sh  # non-interactive username
 # Per-LLM plugin install (no clone):
 #   Claude Code:  /plugin marketplace add solomonsjoseph/amarel-vscode  then  /plugin install amarel-vscode@amarel-vscode
 #   Codex:        codex plugin marketplace add solomonsjoseph/amarel-vscode   (then the /plugins picker)
-#   Gemini CLI:   gemini extensions install https://github.com/solomonsjoseph/amarel-vscode
+#   Gemini CLI:   gemini extensions install https://github.com/solomonsjoseph/amarel-vscode --ref main
 # Install/refresh local agent skill links (symlink path — Cursor/Cline/other agents, and a fallback)
 ./install.sh                          # macOS / Linux
 .\install.ps1                         # Windows
@@ -69,3 +69,4 @@ A fingerprint mismatch in Phase 2 is a hard stop — possible MITM. Do not work 
 - Scripts must remain idempotent. Re-running after any failure is the supported recovery path; don't introduce state that breaks on re-run.
 - "🔒 YOUR TURN" is the convention for any prompt the user must type into (vs. confirmations or info lines). Preserve the marker if you add new interactive steps.
 - The repo ships **five** plugin/extension manifests — Claude (`.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json`), Codex (`.codex-plugin/plugin.json` + `.agents/plugins/marketplace.json`), and Gemini (`gemini-extension.json`). Keep `name` (`amarel-vscode`) and `version` identical across all five (and `PLUGIN_NAME` in `install.{sh,ps1}`). Within each ecosystem the plugin manifest wins if it diverges from its marketplace entry (`claude plugin tag` enforces the Claude pair). Never reintroduce a repo-root `plugin.json` — Claude reads only `.claude-plugin/plugin.json`.
+- `gemini extensions install <url>` (no `--ref`) installs from the latest **GitHub Release**, not the default branch — so the documented Gemini command uses **`--ref main`**. Our releases carry the sysroot tarball (`setup.sh` reads `releases/latest/download/…`) and predate `gemini-extension.json`. To enable the bare (no-`--ref`) command, a future release must include `gemini-extension.json` **and** still attach the sysroot tarball asset, or `setup.sh`'s download breaks. (Claude's `/plugin marketplace add` and Codex's `codex plugin marketplace add` read the default branch directly, so they need no release.)

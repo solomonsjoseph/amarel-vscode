@@ -58,10 +58,12 @@ Then start Codex, run **`/plugins`** → install **amarel-vscode**, and ask:
 ### Gemini CLI (no clone needed)
 
 ```
-gemini extensions install https://github.com/solomonsjoseph/amarel-vscode
+gemini extensions install https://github.com/solomonsjoseph/amarel-vscode --ref main
 ```
 
-Then ask: *"Set up VS Code Remote-SSH for me on Amarel."*
+Then ask: *"Set up VS Code Remote-SSH for me on Amarel."* (`--ref main` installs from
+the branch — `gemini extensions install` otherwise pulls the latest GitHub Release,
+which ships the sysroot tarball but not this extension's manifest.)
 
 ### Cursor, Cline, or any other agent — clone and link
 
