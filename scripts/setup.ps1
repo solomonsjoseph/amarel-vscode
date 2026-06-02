@@ -199,7 +199,7 @@ function Invoke-PhaseKnownHost {
 function Invoke-PhaseCopyId {
   Write-Heading "Phase 3 — Install public key on Amarel"
 
-  $sshArgs = @('-o','BatchMode=yes','-o','ConnectTimeout=5','-i',$SshKeyPath,"$AmarelUser@$AmarelHost",'true')
+  $sshArgs = @('-o','BatchMode=yes','-o','ConnectTimeout=5','-i',$SshKeyPath,'-o','IdentitiesOnly=yes',"$AmarelUser@$AmarelHost",'true')
   & ssh @sshArgs 2>$null
   if ($LASTEXITCODE -eq 0) {
     Write-Info "Key-based login already works — skipping ssh-copy-id"
@@ -220,7 +220,7 @@ function Invoke-PhaseCopyId {
   $pubkey | & ssh -tt -o PreferredAuthentications=password -o PubkeyAuthentication=no "$AmarelUser@$AmarelHost" $remoteCmd
 
   # Verify
-  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i $SshKeyPath "$AmarelUser@$AmarelHost" 'true' 2>$null
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i $SshKeyPath -o IdentitiesOnly=yes "$AmarelUser@$AmarelHost" 'true' 2>$null
   if ($LASTEXITCODE -ne 0) {
     Die "Public key install appeared to succeed but key auth still fails. Inspect ~/.ssh/authorized_keys on Amarel."
   }
@@ -459,6 +459,178 @@ python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d.get('exten
   Write-Info "Extension signature verification disabled (Install in SSH will now work for marketplace extensions)"
 }
 
+# ─── Phase 9.5 — Point VS Code at a modern git (Source Control fix) ─────────
+# VS Code Server uses CentOS 7's stock git 1.8.3.1 (too old for its repo probe:
+# `git rev-parse --git-dir --git-common-dir` needs git >= 2.5), so Source Control
+# registers 0 repos. Point machine-scoped git.path at a modern git (an Lmod
+# module on Amarel) via a wrapper, merged into the same Machine settings.json as
+# Phase 9. Surfaced as "Phase 11" in the guided runbooks. Idempotent, non-fatal.
+function Invoke-PhaseConfigureGit {
+  Write-Heading "Phase 9.5 — Point VS Code at a modern git (Source Control)"
+
+  $remoteScript = @'
+set -uo pipefail
+VSROOT="$HOME/.vscode-server"
+SETTINGS_DIR="$VSROOT/data/Machine"
+SETTINGS_FILE="$SETTINGS_DIR/settings.json"
+WRAPPER="$VSROOT/git-modern.sh"
+
+# git >= 2.5 ? (needs --git-common-dir, which VS Code's repo probe uses)
+ge25() { awk -v v="${1:-0.0}" 'BEGIN{split(v,a,"."); exit !(((a[1]+0)>2)||((a[1]+0)==2&&(a[2]+0)>=5))}'; }
+
+if ! command -v module >/dev/null 2>&1; then
+  for i in /etc/profile.d/lmod.sh /etc/profile.d/modules.sh /usr/share/lmod/lmod/init/bash; do
+    [ -f "$i" ] && . "$i" 2>/dev/null && break
+  done
+fi
+# Amarel's git modules live in the community tree, NOT on the default MODULEPATH;
+# add it before `module load git`, or the load silently finds nothing and we drop
+# to NO_MODERN_GIT even though a modern git is sitting right there.
+if command -v module >/dev/null 2>&1; then
+  [ -d /projects/community/modulefiles ] && module use /projects/community/modulefiles 2>/dev/null || true
+  module load git >/dev/null 2>&1 || true
+fi
+MODERN_GIT="$(command -v git 2>/dev/null || true)"
+MODERN_VER="$([ -n "$MODERN_GIT" ] && "$MODERN_GIT" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+# Version when the modern git runs in a CLEAN, server-like env (no Lmod, no
+# module libs) -- exactly how VS Code Server invokes it. Empty/old here means the
+# binary needs its module environment to run.
+CLEAN_VER="$([ -n "$MODERN_GIT" ] && env -i PATH=/usr/bin:/bin HOME="$HOME" "$MODERN_GIT" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+
+mkdir -p "$VSROOT"
+if [ -n "$MODERN_GIT" ] && ge25 "$CLEAN_VER"; then
+  # Best case (true on Amarel): the modern git is self-sufficient -- runs
+  # standalone with no module libraries -- so point git.path straight at the
+  # binary. No per-call Lmod cost, and it can NEVER silently fall back to the
+  # stock git if a future module load fails (a missing binary fails loudly).
+  rm -f "$WRAPPER"
+  GITPATH="$MODERN_GIT"
+  CHOSEN="absolute path $MODERN_GIT -> git $MODERN_VER (runs standalone; no wrapper needed)"
+elif [ -n "$MODERN_GIT" ] && ge25 "$MODERN_VER"; then
+  # The modern git works only with its module environment (it needs libraries the
+  # module provides -- CLEAN_VER came back empty/old). Write a wrapper that
+  # re-creates that env, then execs the modern git by its ABSOLUTE path (never a
+  # bare `git`), so a failed module load still can't resolve to stock 1.8.3.1.
+  cat > "$WRAPPER" <<WRAP
+#!/usr/bin/env bash
+# Written by amarel-vscode. VS Code Server calls this as git.path in a
+# non-interactive context where Lmod is not initialised. Set up the module
+# environment (this git needs its module libraries), then exec the modern git by
+# ABSOLUTE path -- never bare 'git', so a failed module load can't make VS Code
+# silently fall back to the CentOS 7 stock git (1.8.3.1). Keep stdout clean:
+# only git may write to it (some Lmod sites log to stdout).
+{
+  if ! command -v module >/dev/null 2>&1; then
+    for i in /etc/profile.d/lmod.sh /etc/profile.d/modules.sh /usr/share/lmod/lmod/init/bash; do
+      [ -f "\$i" ] && . "\$i" 2>/dev/null && break
+    done
+  fi
+  if command -v module >/dev/null 2>&1; then
+    [ -d /projects/community/modulefiles ] && module use /projects/community/modulefiles 2>/dev/null
+    module load git 2>/dev/null
+  fi
+} >/dev/null 2>&1
+exec "${MODERN_GIT}" "\$@"
+WRAP
+  chmod +x "$WRAPPER"
+  WRAP_VER="$(env -i PATH=/usr/bin:/bin HOME="$HOME" bash "$WRAPPER" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+  if ge25 "$WRAP_VER"; then
+    GITPATH="$WRAPPER"; CHOSEN="wrapper (module env) -> git $WRAP_VER [binary needs module libs]"
+  else
+    rm -f "$WRAPPER"
+    echo "NO_MODERN_GIT" >&2
+    echo "Found git $MODERN_VER but it would not run via the module wrapper in a clean env." >&2
+    echo "Run 'module use /projects/community/modulefiles && module spider git' on Amarel, then set git.path manually." >&2
+    exit 3
+  fi
+else
+  rm -f "$WRAPPER"
+  echo "NO_MODERN_GIT" >&2
+  echo "No git >= 2.5 found (system git: $(/usr/bin/git --version 2>/dev/null))." >&2
+  echo "Run 'module use /projects/community/modulefiles && module spider git' on Amarel, then set git.path manually." >&2
+  exit 3
+fi
+
+mkdir -p "$SETTINGS_DIR"
+if ! command -v python3 >/dev/null 2>&1; then
+  command -v module >/dev/null 2>&1 && { module load python3 2>/dev/null || module load python 2>/dev/null || true; }
+fi
+if command -v python3 >/dev/null 2>&1; then
+  python3 - "$SETTINGS_FILE" "$GITPATH" <<'PY' || { echo "ERR: settings.json merge failed" >&2; exit 1; }
+import json, os, sys
+path, gp = sys.argv[1], sys.argv[2]
+data = {"extensions.verifySignature": False}
+if os.path.exists(path) and os.path.getsize(path) > 0:
+    with open(path) as f:
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError as exc:
+            sys.exit(f"ERR: {path} is not valid JSON ({exc}); refusing to overwrite")
+    if not isinstance(data, dict):
+        sys.exit(f"ERR: {path} root is not a JSON object; refusing to overwrite")
+data["git.path"] = gp
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(data, f, indent=4)
+    f.write("\n")
+os.replace(tmp, path)
+PY
+elif command -v jq >/dev/null 2>&1; then
+  TMP="$(mktemp "$SETTINGS_DIR/settings.json.XXXXXX")"
+  trap 'rm -f "$TMP"' EXIT
+  if [ -s "$SETTINGS_FILE" ]; then
+    jq --arg gp "$GITPATH" '. + {"git.path": $gp}' "$SETTINGS_FILE" > "$TMP" \
+      || { echo "ERR: $SETTINGS_FILE is not valid JSON; refusing to overwrite" >&2; exit 1; }
+  else
+    jq -n --arg gp "$GITPATH" '{"extensions.verifySignature": false, "git.path": $gp}' > "$TMP"
+  fi
+  mv -f "$TMP" "$SETTINGS_FILE"
+else
+  echo "ERR: neither python3 nor jq available on Amarel; cannot merge settings.json" >&2
+  exit 1
+fi
+# Self-test: reproduce VS Code's repo-detection probe through the chosen git.path,
+# in a throwaway repo + clean (server-like) env. Non-fatal signal (exit 4) if it
+# does not pass, so the caller can warn without aborting the run.
+TESTREPO="$(mktemp -d "${TMPDIR:-/tmp}/amarel-scm.XXXXXX")"
+/usr/bin/git init -q "$TESTREPO" 2>/dev/null || true
+if ( cd "$TESTREPO" && env -i PATH=/usr/bin:/bin HOME="$HOME" "$GITPATH" rev-parse --git-dir --git-common-dir ) >/dev/null 2>&1; then
+  rm -rf "$TESTREPO"
+  echo "git.path set + repo-detection self-test PASSED: $CHOSEN"
+else
+  rm -rf "$TESTREPO"
+  echo "git.path set: $CHOSEN"
+  echo "SELFTEST_FAIL: VS Code repo-detection probe did not pass via git.path" >&2
+  exit 4
+fi
+'@
+
+  # Native nonzero exit (e.g. NO_MODERN_GIT -> 3) must stay non-fatal, so guard
+  # against PowerShell's native-command error preference and branch on the code.
+  # Reset the sentinel first so a launch failure (ssh missing) can't inherit a
+  # stale 0 from Phase 9 and report a false success.
+  $rc = 0
+  $global:LASTEXITCODE = 0
+  try {
+    $remoteScript | & ssh -o BatchMode=yes "$AmarelUser@$AmarelHost" 'bash -se'
+    $rc = $LASTEXITCODE
+  } catch {
+    $rc = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }
+  }
+
+  if ($rc -eq 0) {
+    Write-Info "git.path configured + repo-detection self-test passed — VS Code Source Control will detect your repos"
+  } elseif ($rc -eq 3) {
+    Write-Warn "No git >= 2.5 found on Amarel; Source Control needs a modern git."
+    Write-Warn "Run 'module use /projects/community/modulefiles && module spider git' on Amarel, then set git.path in VS Code's Remote settings (see README troubleshooting)."
+  } elseif ($rc -eq 4) {
+    Write-Warn "git.path was set, but the repo-detection self-test did not pass."
+    Write-Warn "Verify in VS Code (Developer: Reload Window), or see README troubleshooting."
+  } else {
+    Write-Warn "Could not configure git.path (non-fatal). Set it later via the skill's Phase 11, or VS Code Remote settings."
+  }
+}
+
 # ─── Phase 10 — Final instructions ─────────────────────────────────────────
 function Invoke-PhaseFinish {
   Write-Heading "Phase 10 — Open VS Code"
@@ -507,4 +679,5 @@ Invoke-PhaseDownloadTarball
 Invoke-PhaseDeploy
 Invoke-PhaseVerifyEnv
 Invoke-PhaseDisableSignatureCheck
+Invoke-PhaseConfigureGit
 Invoke-PhaseFinish

@@ -8,15 +8,18 @@ description: |
   command at a time, waiting for their confirmation between phases. Handles
   SSH key auth, OS keychain integration, sysroot deployment to the user's
   $HOME on Amarel, ~/.bashrc wiring, and the VS Code Server
-  extension-signature workaround. Idempotent and safe to re-run. Requires
-  Rutgers VPN connection and a valid Amarel account.
+  extension-signature workaround. Also fixes the Source Control "no Git
+  repository" failure by pointing VS Code at a modern git on Amarel (Phase 11)
+  and optionally wires up GitHub auth (Phase 12). Idempotent and safe to re-run.
+  Requires Rutgers VPN connection and a valid Amarel account.
 ---
 
 > **Execution contract:**
 > 1. This skill executes `[EXEC]` steps autonomously via its Bash tool; it never asks the user to run them.
-> 2. All `[EXEC]` steps are noninteractive: SSH/SCP calls use `-o BatchMode=yes`; no interactive prompts are expected. **Key-auth denial scope (Phases 1–5):** before the key is loaded into the agent (Phase 4.1), the **skip probes** (Phase 1.0 Gate-1 and Phase 3.0) return `Permission denied (publickey,…)` *by construction* — this is an **expected routing signal**, not a failure (Phase 1.0 silences this probe's stderr; only its exit code routes SKIP/PROCEED). Treat an auth failure as a hard failure to escalate only (a) on any `[EXEC]` step in Phases 6–10, or (b) in Phases 1–5 if a denial persists **after** Phase 4.2 confirms the key is loaded (e.g. the Phase 4.2.1 dedupe should succeed once the key is loaded). Never re-run a `[TTY]` password/passphrase step (e.g. Phase 3.1) in response to an expected pre-load denial. Any *non-auth* error (network, missing tool, unexpected output) is always surfaced.
+> 2. All `[EXEC]` steps are noninteractive: SSH/SCP calls use `-o BatchMode=yes`; no interactive prompts are expected. **Key-auth denial scope (Phases 1–5):** before the key is loaded into the agent (Phase 4.1), the **skip probes** (Phase 1.0 Gate-1 and Phase 3.0) return `Permission denied (publickey,…)` *by construction* — this is an **expected routing signal**, not a failure (Phase 1.0 silences this probe's stderr; only its exit code routes SKIP/PROCEED). Treat an auth failure as a hard failure to escalate only (a) on any `[EXEC]` step in Phases 6–12, or (b) in Phases 1–5 if a denial persists **after** Phase 4.2 confirms the key is loaded (e.g. the Phase 4.2.1 dedupe should succeed once the key is loaded). Never re-run a `[TTY]` password/passphrase step (e.g. Phase 3.1) in response to an expected pre-load denial. Any *non-auth* error (network, missing tool, unexpected output) is always surfaced.
 > 3. Key state discovered during execution (`LOCAL_OS`, `NetID`, `REPO_ROOT`, `USE_TARBALL`) is recorded at the phase that first establishes it and reused in all subsequent phases without re-deriving.
 > 4. **Host lock:** The only target is `amarel.rutgers.edu`. Do not substitute any other hostname — not `amarel2.rutgers.edu`, not any other `*.rutgers.edu` host. Every `<NetID>@amarel.rutgers.edu` in this skill is a literal target, not a template.
+> 5. **Verify; never take "done" on faith.** When a step hands off to the user (a `[TTY]` command, a GUI action, a `fresh` reset, a `gh` login) and they reply "done", run a read-only probe to confirm the *actual* outcome **before you advance or ask the next question** — the user saying it worked is not proof it worked. And before running any step, probe whether its outcome is already in place: if it is, **skip** it (a resume); if stale residue from a prior run remains where a `fresh` start should have cleaned it, **remove it first**. The skip-probes (Phases 1, 3, 4, 7, 9, 11, 12) already embody this — extend the same discipline to every hand-off, including the reset and the GitHub steps that historically advanced on the user's word alone.
 
 # amarel-vscode-setup
 
@@ -31,6 +34,17 @@ sysroot into the user's `$HOME` on Amarel and configures `~/.bashrc` to point
 VS Code at it.
 
 ## How to run this skill (read this first)
+
+**Two entry modes — decide before Phase 0.**
+- **Full setup** (first-time VS Code-on-Amarel): run Phases 0 → 12 in order.
+- **Targeted repair** (the user is *already connected* — status bar shows
+  `SSH: amarel.rutgers.edu` — and only reports a **Source Control** problem
+  ["no Git repository", the repo won't sync, "Initialize Repository" keeps
+  appearing] or a **GitHub** push/auth problem): still run **Phase 0**
+  (preflight), then **Phase 0.2** confirms key auth and routes you **straight to
+  Phase 11** (Source Control) or **Phase 12** (GitHub). Do **not** drag an
+  already-connected user back through key generation, the host-key prompt, or
+  sysroot deployment (Phases 1–10).
 
 **Phases 1–5 are the SSH key auth dance.** Run each step via Bash yourself
 whenever you can — hand the user a command only when it requires a passphrase
@@ -126,7 +140,7 @@ The complete human touch-point list — everything not on this list is `[EXEC]`:
 |---|---|---|---|---|
 | 1 | 1.2 | `ssh-keygen -t ed25519 …` | Passphrase prompt on TTY — LLM cannot see | All |
 | 2 | 3.1 | `bash ~/.cache/amarel-vscode/step-3.1.sh` (staged ssh-copy-id) | **⚠ LAST AMAREL PASSWORD EVER** — password on TTY | All |
-| 3 | 3.1.1 | `ssh -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu` | Key passphrase on TTY; confirms key installed | All |
+| 3 | 3.1.1 | `ssh -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu` | Key passphrase on TTY; confirms key installed | All |
 | 4 | 4.1 | `ssh-add --apple-use-keychain …` / `ssh-add …` | Passphrase to agent on TTY | All |
 | 5 | 10 | VS Code GUI — click Allow, watch status bar | No Bash equivalent | All |
 
@@ -138,6 +152,31 @@ is `[EXEC]`, not a hand-off — see Phase 4.4).
 within a single login session. A reboot-spanning guarantee requires persistent
 keyring autostart that the skill cannot configure — the skill points the user
 at their distro docs and continues.
+
+### The 60-second map — orient the user before Phase 0 (print this)
+
+New users don't know what's ahead, so before Phase 0 print this plain-English
+map of the whole journey. Keep narrating as you go (each phase already prints a
+one-line description), but this is the orientation that makes the rest make sense:
+
+> **Here's the whole setup, start to finish — so you can follow along:**
+> 1. **Keys (Phases 1–5)** — we create an SSH key just for Amarel and install it,
+>    so you stop typing your Amarel password. You'll touch the terminal about 4
+>    times (one extra on Windows): set a key passphrase, type your Amarel password
+>    **once** (your last time ever), do a test login, and save the passphrase to
+>    your keychain.
+> 2. **The GLIBC fix (Phases 6–8)** — I download a small "sysroot" (a newer glibc
+>    bundle) into your Amarel home and point VS Code Server at it. This is what
+>    clears the `GLIBC >= 2.28` error. I run all of this for you.
+> 3. **Connect (Phases 9–10)** — I flip one VS Code setting on Amarel, then you
+>    connect from VS Code's **Remote-SSH** menu.
+> 4. **Git & GitHub (Phases 11–12, optional)** — if you'll use Source Control, I
+>    point VS Code at a modern git on Amarel; Phase 12 wires up GitHub if you push
+>    from Amarel.
+>
+> You don't need to understand each command — before every step I'll tell you what
+> it does and what success looks like, and **I check the result myself before
+> moving on**, so you can't get silently stuck.
 
 ### Heads-up: your terminal moments
 
@@ -200,32 +239,107 @@ nothing below will work without it.
 
 **Record `LOCAL_OS` from the OS line, then ask the user for their NetID and advance.**
 
-### 0.1 — Fresh start or resume? (ask the user)
+### 0.1 — Fresh start or resume? (ask the user — explain it, don't just ask)
 
 Existing state from a previous run — an installed key, a deployed sysroot,
-merged settings — makes the skip-probes in Phases 1, 3, 4, 7, and 9 fire, so the
-skill fast-forwards and can report success **without re-exercising those steps**.
-That is the right behaviour for a normal resume, but it hides problems when
-something has drifted: you changed your Amarel password, rotated keys, or a
-prior run only half-finished. Offer the choice **before any setup work**:
+merged settings — makes the skip-probes in Phases 1, 3, 4, 7, 9, and 11 fire, so
+the skill fast-forwards and can report success **without re-exercising those
+steps**. That is the right behaviour for a normal resume, but it hides problems
+when something has drifted: you changed your Amarel password, rotated keys, or a
+prior run only half-finished. A new user has **no context to choose blindly** and
+will often just pick `resume` — so spell out both choices in plain language
+**before any setup work**, then offer:
 
 > **🔒 YOUR TURN — fresh start or resume?**
-> - Reply **`resume`** (default) to keep whatever is already set up — fastest,
->   skips anything already done.
-> - Reply **`fresh`** to wipe what this skill created and run every phase from
->   scratch. Pick this if you changed your Amarel password, want to re-key, or
->   just want a clean verification run.
+>
+> **First time setting this up on this computer?** There's nothing yet to wipe,
+> so **`resume`** is the right answer — it simply runs every step from the
+> beginning (there's just nothing to skip). You'd get the same result from
+> `fresh`, only after a no-op cleanup.
+>
+> **Done this before, or a previous attempt half-finished?**
+> - **`resume`** — keep what's already set up and skip what's already done.
+>   Fastest. Pick this to continue a setup, or to fix one specific thing.
+> - **`fresh`** — wipe everything this skill created (your local Amarel key, the
+>   sysroot on Amarel, and the skill's settings) and rebuild from scratch. Pick
+>   this if you changed your Amarel password, want to re-key, a prior run left
+>   things broken, or you want a guaranteed-clean verification run.
+>
+> Not sure? **`resume` is the safe default** — the skill detects what's missing
+> and fills only the gaps; it won't redo or break anything already working.
 
 **If the user chose `fresh`:** run the **`full`** reset from the `## Fresh start`
 section now — it removes the skill's `ssh_config` / `known_hosts` / `~/.zshrc`
 entries, deletes the local `id_ed25519_amarel` key pair, and wipes everything the
 skill deployed on Amarel (the `authorized_keys` line, the extracted
-`~/.vscode-server/sysroot` + `sysroot.sh`, and the `~/.bashrc` loader block), so
-**every** phase (1–9) re-runs from scratch. It never touches any other SSH host
-or key. Then begin at Phase 1.
+`~/.vscode-server/sysroot` + `sysroot.sh`, the `~/.bashrc` loader block, and the
+Phase 11 `git-modern.sh` wrapper + `git.path`/`extensions.verifySignature`
+settings), so **every** phase (1–11) re-runs from scratch. It never touches any
+other SSH host or key.
+
+**Then verify the reset actually cleaned up before starting Phase 1 — don't take
+"done" on faith.** The Amarel-side wipe is best-effort (it's skipped if key auth
+was already broken), so confirm the local artifacts are gone and tell the user
+plainly what, if anything, the reset could not reach:
+
+**macOS/Linux — run yourself:**
+
+[VERIFY]
+```bash
+echo "Post-reset cleanliness check:"
+test -f ~/.ssh/id_ed25519_amarel && echo "  ✗ local key pair still present" || echo "  ✓ local key pair removed"
+ssh -G amarel.rutgers.edu 2>/dev/null | grep -qE '^identityfile.*id_ed25519_amarel' && echo "  ✗ ssh_config amarel block still present" || echo "  ✓ ssh_config amarel block removed"
+grep -qE '^amarel\.rutgers\.edu ' ~/.ssh/known_hosts 2>/dev/null && echo "  ✗ known_hosts amarel entry still present" || echo "  ✓ known_hosts amarel entry removed"
+grep -q 'id_ed25519_amarel' ~/.zshrc 2>/dev/null && echo "  ✗ ~/.zshrc loader still present" || echo "  ✓ ~/.zshrc loader removed"
+```
+
+**Windows PowerShell — run yourself:**
+
+[VERIFY]
+```powershell
+"Post-reset cleanliness check:"
+if (Test-Path "$HOME\.ssh\id_ed25519_amarel") { "  ✗ local key pair still present" } else { "  ✓ local key pair removed" }
+if ((ssh -G amarel.rutgers.edu 2>$null) -match 'identityfile.*id_ed25519_amarel') { "  ✗ ssh_config amarel block still present" } else { "  ✓ ssh_config amarel block removed" }
+if ((Get-Content "$HOME\.ssh\known_hosts" -ErrorAction SilentlyContinue) -match '^amarel\.rutgers\.edu ') { "  ✗ known_hosts amarel entry still present" } else { "  ✓ known_hosts amarel entry removed" }
+```
+
+- **All `✓`** → the local side is clean; begin Phase 1.
+- **Any `✗`** → the reset didn't fully apply; re-run it (it's idempotent) before continuing.
+- **Amarel-side residue:** if the reset printed `• Skipped Amarel cleanup …`, key
+  auth was already gone, so the old key line, sysroot, and any earlier
+  `git.path` / `git-modern.sh` may still be on Amarel. That's fine — Phases 3, 7,
+  and 11 overwrite them — but **say so explicitly** rather than implying a
+  spotless cluster, so the user isn't surprised when those phases run.
 
 **If the user chose `resume` (or didn't answer):** continue to Phase 1 — the
-skip-probes handle the rest.
+skip-probes handle the rest. (Skip-probes *skip what is already correctly in
+place*; they do **not** scrub stale residue — that is exactly what `fresh` is
+for, so don't reach for a resume when the user actually needs a clean slate.)
+
+### 0.2 — Targeted-repair fast path (already connected → Source Control / GitHub)
+
+Use this **instead of** the 0.1 fresh/resume offer when the user is already
+connected and only needs the Source Control or GitHub fix (see "Two entry
+modes" above). It avoids re-running the SSH-key and sysroot phases.
+
+Substitute the user's NetID, then probe key auth (run yourself):
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu true && echo "READY" || echo "NEEDS_SETUP"
+```
+
+- `READY` → passwordless SSH works (the same auth VS Code Remote-SSH uses), so
+  the user is genuinely set up. **Jump straight to Phase 11** (Source Control);
+  if they only asked about GitHub, jump to **Phase 12**. Skip Phases 1–10.
+- `NEEDS_SETUP` → passwordless SSH is not working (they aren't set up yet, or
+  connected with a password). Fall back to the normal flow — start at **Phase
+  0.1** (fresh/resume) and proceed through **Phase 1.0**'s skip probe; Phase 11
+  still runs at the end.
+
+This is the path for "I'm already connected but Source Control says *no Git
+repository*" — recognise the symptom, confirm with the probe, and go straight to
+the fix.
 
 ---
 
@@ -237,8 +351,10 @@ keeps it separate from any GitHub key).
 ### 1.0 — Full skip probe (run yourself)
 
 Before anything, probe whether key auth already works **and** the `ssh_config`
-block is fully correct. This uses `-i` explicitly so success via an unrelated
-loaded key does not falsely satisfy the gate.
+block is fully correct. This uses `-i` **with `-o IdentitiesOnly=yes`** so ssh
+offers only the Amarel key — otherwise an unrelated key in your agent could
+authenticate and falsely satisfy the gate (`-i` alone does not restrict which
+agent keys ssh offers).
 
 **macOS/Linux — run yourself:**
 
@@ -247,7 +363,7 @@ loaded key does not falsely satisfy the gate.
 # Gate 1: key auth (stderr silenced — only the exit code routes SKIP/PROCEED;
 # a pre-setup "Permission denied"/"Host key verification failed" here is normal)
 ssh -o BatchMode=yes -o ConnectTimeout=5 \
-    -i ~/.ssh/id_ed25519_amarel \
+    -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes \
     <NetID>@amarel.rutgers.edu true 2>/dev/null
 KEY_OK=$?
 
@@ -270,7 +386,7 @@ fi
 [EXEC]
 ```powershell
 & ssh -o BatchMode=yes -o ConnectTimeout=5 `
-    -i "$HOME\.ssh\id_ed25519_amarel" `
+    -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes `
     "<NetID>@amarel.rutgers.edu" true 2>&1 | Out-Null
 $keyOk = ($LASTEXITCODE -eq 0)
 $cfg = & ssh -G amarel.rutgers.edu 2>$null
@@ -426,7 +542,7 @@ so future logins use the key instead of a password.
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu true 2>/dev/null && echo "ALREADY WORKS — skip Phase 3" || echo "NEEDS key install"
+ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu true 2>/dev/null && echo "ALREADY WORKS — skip Phase 3" || echo "NEEDS key install"
 ```
 
 If `ALREADY WORKS`, skip to Phase 4.
@@ -504,14 +620,14 @@ pwsh -ep Bypass -File "$env:LOCALAPPDATA\amarel-vscode\step-3.1.ps1"
 
 [TTY]
 ```bash
-ssh -i ~/.ssh/id_ed25519_amarel <NetID>@amarel.rutgers.edu
+ssh -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu
 ```
 
 **Windows PowerShell — copy this:**
 
 [TTY]
 ```powershell
-ssh -i "$HOME\.ssh\id_ed25519_amarel" "<NetID>@amarel.rutgers.edu"
+ssh -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes "<NetID>@amarel.rutgers.edu"
 ```
 
 > SSH will prompt for your **key passphrase** (the one you set in Phase 1.2 — not your Amarel password). Enter it and check the result:
@@ -664,11 +780,19 @@ copies). `sort -u` is idempotent:
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
+ssh -o BatchMode=yes -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
 ```
 
-If this returns `Permission denied`, the key isn't really loaded — re-run Phase
-4.2 verify (and 4.1 if needed) before continuing. Otherwise advance to Phase 4.3.
+**`-i … -o IdentitiesOnly=yes` is load-bearing here.** `ssh_config` isn't written
+until Phase 4.3, so without it ssh offers *every* key in your agent; if you have
+several, Amarel hits `MaxAuthTries` before your Amarel key is tried and returns a
+**false** `Permission denied`. Pinning the identity makes ssh offer only the
+Amarel key, so this reflects the real authorized_keys state.
+
+If this *still* returns `Permission denied` with the identity pinned, the Amarel
+key genuinely isn't in `~/.ssh/authorized_keys` — only then re-check the Phase
+3.1 install (and confirm Phase 4.2 shows the key in the agent). Otherwise advance
+to Phase 4.3.
 
 ### 4.3 — Write strict ssh_config (run yourself)
 
@@ -1658,9 +1782,495 @@ already open (otherwise no action needed).
 - VS Code prompts for password → SSH key auth not fully working. Re-run Phase 4.2 verify and Phase 4.3 ssh_config validation.
 - VS Code server segfaults / patching fails after Allow → likely patchelf issue; **Phase 7.7 should have caught this**, but re-run 7.7 → 7.8 if needed.
 - Repeated install failures even after the above → recovery branch **Phase 7.5** (wipe). Opt-in only.
+- Source Control panel shows *"doesn't have a Git repository / Initialize Repository"* on a folder that **is** a clone → the server is using CentOS 7's stock git 1.8.3.1. Continue to **Phase 11**.
 
-**This is the end of the runbook.** If the status bar turns green, ask the
-user to confirm and you're done.
+**Once the status bar is green, the core sysroot setup is done.** If you'll use
+git / Source Control in VS Code on Amarel, continue to **Phase 11** (and the
+optional **Phase 12** for GitHub). If not, you're finished here.
+
+---
+
+## Phase 11 — Source Control: point VS Code at a modern git
+
+**Goal:** Make VS Code's Source Control panel detect your cloned repos. VS Code
+Server resolves bare `git` from its **non-interactive PATH**, which on Amarel
+(CentOS 7) is the OS-stock `/usr/bin/git` = **git 1.8.3.1**. VS Code's
+repository-detection probe runs `git rev-parse --git-dir --git-common-dir`, and
+`--git-common-dir` was introduced in **git 2.5** — so on 1.8.3.1 the probe fails
+and VS Code registers **0 repositories** (the panel shows *"The folder currently
+open doesn't have a Git repository / Initialize Repository"* even on a real
+clone). The fix: set the machine-scoped **`git.path`** in the remote Machine
+settings to a modern git on Amarel. **Run the `[EXEC]` steps yourself over `ssh
+-o BatchMode=yes`** — this reuses the exact `settings.json` file and merge ladder
+from Phase 9.
+
+> **When this matters:** only once you open a git repo on Amarel in VS Code. If
+> Source Control already shows your branch and changes, `git.path` is already
+> correct — skip to Phase 12 (or finish). This phase is independent of the
+> "unsupported OS" banner, which is harmless once the sysroot is in place.
+
+### 11.0 — Probe: which git does the server see? (run yourself)
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'command -v git; git --version'
+```
+
+**Success marker:** if this prints `git version 1.8.x` (or anything below 2.5),
+the fix is likely needed — continue to **11.0.1**, which decides for certain. If it
+already prints `git version 2.5`+ **and** Source Control already works, 11.0.1 will
+confirm you can skip straight to Phase 12.
+
+### 11.0.1 — Already configured and working? (skip-probe — run yourself)
+
+Don't re-apply the fix when it's already in place — and detect the case where IT
+later upgraded Amarel's git so the fix is no longer needed. This runs VS Code's
+exact repo-detection probe (`git rev-parse --git-dir --git-common-dir`, in a clean
+server-like env + throwaway repo) against (1) the `git.path` already in
+`settings.json`, then (2) the server's default git, and reports which:
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+set -uo pipefail
+SETTINGS_FILE="$HOME/.vscode-server/data/Machine/settings.json"
+ge25() { awk -v v="${1:-0.0}" 'BEGIN{split(v,a,"."); exit !(((a[1]+0)>2)||((a[1]+0)==2&&(a[2]+0)>=5))}'; }
+# VS Code's exact repo-detection probe through a given git, in a clean server-like
+# env + throwaway repo. Passes only if that git works AND is >= 2.5.
+probe() {
+  local g="$1" ver repo rc
+  ver="$(env -i PATH=/usr/bin:/bin HOME="$HOME" "$g" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+  ge25 "$ver" || return 1
+  repo="$(mktemp -d "${TMPDIR:-/tmp}/amarel-scm.XXXXXX")"
+  /usr/bin/git init -q "$repo" 2>/dev/null || true
+  ( cd "$repo" && env -i PATH=/usr/bin:/bin HOME="$HOME" "$g" rev-parse --git-dir --git-common-dir ) >/dev/null 2>&1
+  rc=$?; rm -rf "$repo"; return $rc
+}
+# Read the git.path VS Code would use (python3 -> jq -> dependency-free sed).
+GP=""
+if [ -f "$SETTINGS_FILE" ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    GP="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("git.path",""))' "$SETTINGS_FILE" 2>/dev/null)"
+  elif command -v jq >/dev/null 2>&1; then
+    GP="$(jq -r '."git.path" // empty' "$SETTINGS_FILE" 2>/dev/null)"
+  fi
+  [ -n "$GP" ] || GP="$(sed -n 's/.*"git\.path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SETTINGS_FILE" 2>/dev/null | head -n1)"
+fi
+if [ -n "$GP" ] && probe "$GP"; then
+  echo "ALREADY_OK: git.path is set and passes the probe ($GP) — skip 11.1"
+elif probe git; then
+  echo "SYSTEM_GIT_OK: the server's default git is already >= 2.5 and passes — no git.path needed"
+elif [ -n "$GP" ]; then
+  echo "NEEDS_FIX: git.path is set ($GP) but no longer passes (module moved/updated?) — run 11.1"
+else
+  echo "NEEDS_FIX: no working modern git configured — run 11.1"
+fi
+REMOTE
+```
+
+Routing:
+
+- `ALREADY_OK` → the configured `git.path` already satisfies VS Code's probe — the
+  "present git is already good enough → skip" case, **including after an IT git
+  update that your config still clears**. **Skip 11.1**; go to **11.2**'s live
+  confirm (the automated check already passed here), or on to Phase 12.
+- `SYSTEM_GIT_OK` → IT upgraded Amarel's *default* git to ≥ 2.5, so no `git.path`
+  override is needed at all → **skip the whole fix → Phase 12**.
+- `NEEDS_FIX` → nothing is configured yet, **or** a previously-working `git.path`
+  stopped passing (e.g. IT retired the exact module build) → **run 11.1** to
+  (re)detect and write it.
+
+### 11.1 — Detect a modern git and write `git.path` (run yourself)
+
+**Run this only when 11.0.1 reported `NEEDS_FIX`.** One idempotent remote block: it initialises Lmod in the non-interactive shell,
+adds Amarel's community module tree (`/projects/community/modulefiles`, where the
+git modules actually live), and loads a modern `git` module. It then **prefers the
+modern git's absolute path**: if that binary runs standalone in a **clean,
+server-like environment** (no module libraries needed — true on Amarel), it points
+`git.path` straight at the binary — fastest, and it can **never silently fall back
+to the stock git** the way a `module load; exec git` wrapper can. Only if the
+binary needs its module environment to run does it write the
+`~/.vscode-server/git-modern.sh` wrapper (which re-creates that environment, then
+execs the modern git **by absolute path** — never a bare `git` — so a failed
+module load still can't resolve to CentOS 7's git 1.8.3.1). Either way it merges
+`"git.path"` into `~/.vscode-server/data/Machine/settings.json` (preserving
+`extensions.verifySignature` and every other key). If no git ≥ 2.5 can be found at
+all, it stops with `NO_MODERN_GIT`.
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+set -uo pipefail
+VSROOT="$HOME/.vscode-server"
+SETTINGS_DIR="$VSROOT/data/Machine"
+SETTINGS_FILE="$SETTINGS_DIR/settings.json"
+WRAPPER="$VSROOT/git-modern.sh"
+
+# git >= 2.5 ? (needs --git-common-dir, which VS Code's repo probe uses)
+ge25() { awk -v v="${1:-0.0}" 'BEGIN{split(v,a,"."); exit !(((a[1]+0)>2)||((a[1]+0)==2&&(a[2]+0)>=5))}'; }
+
+# Make Lmod usable in THIS non-interactive shell, then load a modern git.
+if ! command -v module >/dev/null 2>&1; then
+  for i in /etc/profile.d/lmod.sh /etc/profile.d/modules.sh /usr/share/lmod/lmod/init/bash; do
+    [ -f "$i" ] && . "$i" 2>/dev/null && break
+  done
+fi
+# Amarel's git modules live in the community tree, NOT on the default MODULEPATH;
+# add it before `module load git`, or the load silently finds nothing and we drop
+# to NO_MODERN_GIT even though a modern git is sitting right there.
+if command -v module >/dev/null 2>&1; then
+  [ -d /projects/community/modulefiles ] && module use /projects/community/modulefiles 2>/dev/null || true
+  module load git >/dev/null 2>&1 || true
+fi
+MODERN_GIT="$(command -v git 2>/dev/null || true)"
+MODERN_VER="$([ -n "$MODERN_GIT" ] && "$MODERN_GIT" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+# Version when the modern git runs in a CLEAN, server-like env (no Lmod, no
+# module libs) -- exactly how VS Code Server invokes it. Empty/old here means the
+# binary needs its module environment to run.
+CLEAN_VER="$([ -n "$MODERN_GIT" ] && env -i PATH=/usr/bin:/bin HOME="$HOME" "$MODERN_GIT" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+
+mkdir -p "$VSROOT"
+if [ -n "$MODERN_GIT" ] && ge25 "$CLEAN_VER"; then
+  # Best case (true on Amarel): the modern git is self-sufficient -- it runs
+  # standalone with no module libraries -- so point git.path straight at the
+  # binary. No per-call Lmod cost, and (unlike a `module load; exec git` wrapper)
+  # it can NEVER silently fall back to the stock git if a future module load
+  # fails -- a missing binary fails loudly instead.
+  rm -f "$WRAPPER"
+  GITPATH="$MODERN_GIT"
+  CHOSEN="absolute path $MODERN_GIT -> git $MODERN_VER (runs standalone; no wrapper needed)"
+elif [ -n "$MODERN_GIT" ] && ge25 "$MODERN_VER"; then
+  # The modern git works only with its module environment (it needs libraries the
+  # module provides -- CLEAN_VER came back empty/old). Write a wrapper that
+  # re-creates that env, then execs the modern git by its ABSOLUTE path (never a
+  # bare `git`), so a failed module load still can't resolve to stock 1.8.3.1.
+  cat > "$WRAPPER" <<WRAP
+#!/usr/bin/env bash
+# Written by amarel-vscode. VS Code Server calls this as git.path in a
+# non-interactive context where Lmod is not initialised. Set up the module
+# environment (this git needs its module libraries), then exec the modern git by
+# ABSOLUTE path -- never bare 'git', so a failed module load can't make VS Code
+# silently fall back to the CentOS 7 stock git (1.8.3.1). Keep stdout clean:
+# only git may write to it (some Lmod sites log to stdout).
+{
+  if ! command -v module >/dev/null 2>&1; then
+    for i in /etc/profile.d/lmod.sh /etc/profile.d/modules.sh /usr/share/lmod/lmod/init/bash; do
+      [ -f "\$i" ] && . "\$i" 2>/dev/null && break
+    done
+  fi
+  if command -v module >/dev/null 2>&1; then
+    [ -d /projects/community/modulefiles ] && module use /projects/community/modulefiles 2>/dev/null
+    module load git 2>/dev/null
+  fi
+} >/dev/null 2>&1
+exec "${MODERN_GIT}" "\$@"
+WRAP
+  chmod +x "$WRAPPER"
+  WRAP_VER="$(env -i PATH=/usr/bin:/bin HOME="$HOME" bash "$WRAPPER" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+  if ge25 "$WRAP_VER"; then
+    GITPATH="$WRAPPER"; CHOSEN="wrapper (module env) -> git $WRAP_VER [binary needs module libs]"
+  else
+    rm -f "$WRAPPER"
+    echo "NO_MODERN_GIT" >&2
+    echo "Found git $MODERN_VER but it would not run via the module wrapper in a clean env." >&2
+    echo "Run 'module use /projects/community/modulefiles && module spider git' on Amarel, then set git.path manually (Phase 11.3)." >&2
+    exit 3
+  fi
+else
+  rm -f "$WRAPPER"
+  echo "NO_MODERN_GIT" >&2
+  echo "No git >= 2.5 found (system git: $(/usr/bin/git --version 2>/dev/null))." >&2
+  echo "Run 'module use /projects/community/modulefiles && module spider git' on Amarel, then set git.path manually (Phase 11.3)." >&2
+  exit 3
+fi
+
+# Merge git.path into the remote Machine settings.json (preserve all other keys).
+mkdir -p "$SETTINGS_DIR"
+if ! command -v python3 >/dev/null 2>&1; then
+  command -v module >/dev/null 2>&1 && { module load python3 2>/dev/null || module load python 2>/dev/null || true; }
+fi
+if command -v python3 >/dev/null 2>&1; then
+  python3 - "$SETTINGS_FILE" "$GITPATH" <<'PY' || { echo "ERR: settings.json merge failed" >&2; exit 1; }
+import json, os, sys
+path, gp = sys.argv[1], sys.argv[2]
+data = {"extensions.verifySignature": False}
+if os.path.exists(path) and os.path.getsize(path) > 0:
+    with open(path) as f:
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError as exc:
+            sys.exit(f"ERR: {path} is not valid JSON ({exc}); refusing to overwrite")
+    if not isinstance(data, dict):
+        sys.exit(f"ERR: {path} root is not a JSON object; refusing to overwrite")
+data["git.path"] = gp
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(data, f, indent=4)
+    f.write("\n")
+os.replace(tmp, path)
+PY
+elif command -v jq >/dev/null 2>&1; then
+  TMP="$(mktemp "$SETTINGS_DIR/settings.json.XXXXXX")"
+  trap 'rm -f "$TMP"' EXIT
+  if [ -s "$SETTINGS_FILE" ]; then
+    jq --arg gp "$GITPATH" '. + {"git.path": $gp}' "$SETTINGS_FILE" > "$TMP" \
+      || { echo "ERR: $SETTINGS_FILE is not valid JSON; refusing to overwrite" >&2; exit 1; }
+  else
+    jq -n --arg gp "$GITPATH" '{"extensions.verifySignature": false, "git.path": $gp}' > "$TMP"
+  fi
+  mv -f "$TMP" "$SETTINGS_FILE"
+else
+  echo "ERR: neither python3 nor jq on Amarel; cannot merge settings.json" >&2
+  exit 1
+fi
+echo "✓ git.path set: $CHOSEN"
+REMOTE
+```
+
+**Success marker:** `✓ git.path set: …` (it tells you whether it chose the
+wrapper or an absolute path). The merge is idempotent — re-running is safe.
+Continue to **11.2** to verify the fix end-to-end.
+
+**If you see `NO_MODERN_GIT`:** Amarel exposes no git ≥ 2.5 the script could
+auto-load. Use the 11.3 fallback.
+
+### 11.2 — Verify the fix
+
+**First, an automated check (run yourself).** This reproduces VS Code's exact
+repo-detection probe — `git rev-parse --git-dir --git-common-dir` — through the
+`git.path` you just wrote, inside a throwaway repo in a clean server-like
+environment, and returns a clear PASS/FAIL. It is the deterministic "does the fix
+actually work?" test; you don't have to eyeball the GUI to know.
+
+[VERIFY]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+set -uo pipefail
+SETTINGS_FILE="$HOME/.vscode-server/data/Machine/settings.json"
+ge25() { awk -v v="${1:-0.0}" 'BEGIN{split(v,a,"."); exit !(((a[1]+0)>2)||((a[1]+0)==2&&(a[2]+0)>=5))}'; }
+# Read the git.path VS Code will actually use.
+GP=""
+if command -v python3 >/dev/null 2>&1; then
+  GP="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("git.path",""))' "$SETTINGS_FILE" 2>/dev/null)"
+elif command -v jq >/dev/null 2>&1; then
+  GP="$(jq -r '."git.path" // empty' "$SETTINGS_FILE" 2>/dev/null)"
+fi
+# Last-resort parse if neither python3 nor jq is on this shell (Amarel paths have no quotes/backslashes).
+[ -n "$GP" ] || GP="$(sed -n 's/.*"git\.path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SETTINGS_FILE" 2>/dev/null | head -n1)"
+[ -n "$GP" ] || { echo "FAIL: git.path is not set in $SETTINGS_FILE -- run 11.1 first." >&2; exit 1; }
+GP_VER="$(env -i PATH=/usr/bin:/bin HOME="$HOME" "$GP" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+STOCK_VER="$(/usr/bin/git --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+# Throwaway repo; run VS Code's exact probe with cwd = repo (as VS Code does).
+TESTREPO="$(mktemp -d "${TMPDIR:-/tmp}/amarel-scm.XXXXXX")"
+trap 'rm -rf "$TESTREPO"' EXIT
+/usr/bin/git init -q "$TESTREPO" 2>/dev/null || true
+if ( cd "$TESTREPO" && env -i PATH=/usr/bin:/bin HOME="$HOME" "$GP" rev-parse --git-dir --git-common-dir ) >/dev/null 2>&1 && ge25 "$GP_VER"; then
+  GP_OK=1
+else
+  GP_OK=0
+fi
+echo "VS Code repo-detection probe: git rev-parse --git-dir --git-common-dir"
+echo "  via git.path : git ${GP_VER:-<none>}  ->  $([ $GP_OK = 1 ] && echo PASS || echo FAIL)   [$GP]"
+echo "  stock git    : git ${STOCK_VER:-?} (too old for --git-common-dir; the bug Phase 11 fixes)"
+if [ $GP_OK = 1 ]; then
+  echo "✓ Source Control fix VERIFIED -- VS Code will detect repositories."
+else
+  echo "✗ git.path does NOT satisfy the probe -- re-run 11.1, or use the 11.3 fallback." >&2
+  exit 1
+fi
+REMOTE
+```
+
+**Success marker:** `✓ Source Control fix VERIFIED …`, with the `via git.path`
+line showing `PASS`. A `FAIL` there (or `git.path is not set`) means re-run 11.1,
+or use the 11.3 fallback if Amarel exposes no modern git. (The `stock git` line is
+informational — it shows the old `/usr/bin/git` version VS Code would otherwise
+use.)
+
+**Then confirm it live (your turn).**
+
+> **🔒 YOUR TURN:** In your connected VS Code window, open the Command Palette
+> (`Cmd/Ctrl+Shift+P`) and run **Developer: Reload Window**.
+
+After it reloads, open the Source Control panel, then check **View → Output** and
+pick **Git** in the dropdown.
+
+- **Success:** Source Control shows your branch + changes; the Git Output shows
+  `Using git "2.x"` and `repositories (1)`. You're done with Phase 11.
+- **Still empty:** paste the first ~10 lines of the Git Output back to me.
+
+### 11.3 — Fallback: set `git.path` by hand (only if 11.1 said `NO_MODERN_GIT`)
+
+Find the module name yourself:
+
+[TTY]
+```bash
+ssh <NetID>@amarel.rutgers.edu 'bash -lc "module use /projects/community/modulefiles; module avail git"'
+```
+
+(`bash -lc` so Lmod is initialised, and `module use …` so Amarel's community
+git modules are visible — a bare `module spider git` finds nothing without it.)
+Paste the output back and I'll re-run 11.1 loading the exact module
+(`module load git/<version>`). Or set it in the GUI: VS Code **Settings** →
+switch to the **Remote [SSH: amarel.rutgers.edu]** tab → search `git.path` → set
+it to the modern git's absolute path (or to a wrapper that runs `module load
+git`) → **Developer: Reload Window**.
+
+---
+
+## Phase 12 — (Optional) GitHub authentication & git identity
+
+**Goal:** Let git on Amarel authenticate to GitHub without password prompts and
+commit with an identity GitHub accepts. **Skip this phase entirely if you only
+edit files and never push to GitHub from Amarel.**
+
+These steps run **in a terminal on Amarel** — use VS Code's integrated terminal
+(**Terminal → New Terminal** in your connected window) so `gh` and `git` are
+Amarel's, not your laptop's. The device-flow code and the resulting token are
+handled by `gh`; **I never see them.**
+
+### 12.0 — Is `gh` available, and are you already signed in? (run yourself)
+
+One probe answers both: it finds `gh` (adding Amarel's community module tree if
+needed, same as Phase 11), prints the version, then checks `gh auth status` —
+so we run the sign-in step **only if you are not already logged in**.
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'command -v gh >/dev/null 2>&1 || { for i in /etc/profile.d/modules.sh /etc/profile.d/lmod.sh /usr/share/lmod/lmod/init/bash; do [ -f "$i" ] && . "$i" 2>/dev/null && break; done; command -v module >/dev/null 2>&1 && { module use /projects/community/modulefiles 2>/dev/null; module load gh 2>/dev/null; }; }; if command -v gh >/dev/null 2>&1; then gh --version | head -1; gh auth status >/dev/null 2>&1 && echo AUTHED || echo NEEDS_LOGIN; else echo NO_GH; fi'
+```
+
+- `gh version …` + **`AUTHED`** → already signed in to GitHub. **Skip 12.1.** Go
+  to 12.2 to make sure the git credential helper is wired (safe to re-run), then
+  12.3 for identity.
+- `gh version …` + **`NEEDS_LOGIN`** → `gh` is present but not authenticated →
+  run **12.1**. If `gh` only resolved via the module, tell the user to run
+  `module use /projects/community/modulefiles && module load gh` in the Amarel
+  terminal first so `gh` is on PATH for 12.1.
+- `NO_GH` → GitHub CLI isn't installed. Either `module spider gh` to find a
+  module, or fall back to a Personal Access Token with git's `store`/`cache`
+  helper (ask me) — then skip to 12.3.
+
+### 12.1 — Sign in to GitHub (your turn — device flow, no browser on Amarel)
+
+**Only if 12.0 reported `NEEDS_LOGIN`.** If it said `AUTHED`, you're already
+signed in — skip to 12.2.
+
+> **🔒 YOUR TURN:** In the VS Code integrated terminal **on Amarel**, run the
+> command below. `gh` prints a one-time code and a URL — open the URL on your
+> laptop, paste the code, approve. `BROWSER=` stops it trying to launch a
+> browser on the headless cluster.
+
+[TTY]
+```bash
+BROWSER= gh auth login --hostname github.com --git-protocol https
+```
+
+Choose **HTTPS** and **Login with a web browser** when prompted.
+
+**When the user says they finished the device flow, verify it yourself before
+advancing — don't take "done" on faith. Re-run the 12.0 probe (it reads only
+login state, never the token):**
+
+[VERIFY]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'command -v gh >/dev/null 2>&1 || { for i in /etc/profile.d/modules.sh /etc/profile.d/lmod.sh /usr/share/lmod/lmod/init/bash; do [ -f "$i" ] && . "$i" 2>/dev/null && break; done; command -v module >/dev/null 2>&1 && { module use /projects/community/modulefiles 2>/dev/null; module load gh 2>/dev/null; }; }; gh auth status >/dev/null 2>&1 && echo AUTHED || echo NEEDS_LOGIN'
+```
+
+- `AUTHED` → login worked; advance to 12.2.
+- `NEEDS_LOGIN` → the device flow didn't complete (or `gh` resolved only via the
+  module — then tell them to run `module use /projects/community/modulefiles && module load gh`
+  in the Amarel terminal first); have them re-run 12.1, then re-probe.
+
+### 12.2 — Wire `gh` as git's credential helper
+
+**Skip-probe first (run yourself — is it already wired? don't re-ask on a resume):**
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'git config --global --get-regexp "^credential\." 2>/dev/null | grep -qi "gh auth git-credential" && echo "ALREADY_WIRED — skip 12.2" || echo "NEEDS_SETUP_GIT"'
+```
+
+`ALREADY_WIRED` → the credential helper is already in place; skip to 12.3.
+`NEEDS_SETUP_GIT` → hand the user the command below.
+
+> **🔒 YOUR TURN:** still in the Amarel terminal — copy this. It must run
+> **after** 12.1; it scopes the credential helper to `github.com` only.
+
+[TTY]
+```bash
+gh auth setup-git
+```
+
+**After they say done, verify the helper is wired (run yourself — reads only the helper *command*, never a token):**
+
+[VERIFY]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'git config --global --get-regexp "^credential\." 2>/dev/null | grep -qi "gh auth git-credential" && echo "✓ gh wired as git credential helper" || echo "✗ helper not set — re-run 12.2 (it must run after a successful 12.1)"'
+```
+
+### 12.3 — Set your git identity
+
+**Skip-probe first (run yourself — is the identity already set? don't re-ask on a resume):**
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'n=$(git config --global user.name); e=$(git config --global user.email); if [ -n "$n" ] && [ -n "$e" ]; then case "$e" in *@users.noreply.github.com) echo "ALREADY_SET: $n <$e> — skip 12.3";; *) echo "SET_BUT_CHECK: $n <$e> — set, but NOT a no-reply address";; esac; else echo "NEEDS_IDENTITY"; fi'
+```
+
+- `ALREADY_SET …` → name + email are set and the email is a no-reply address; skip to 12.4 (or finish).
+- `SET_BUT_CHECK …` → identity is set but the email isn't a no-reply address. Fine **if** GitHub email privacy is off; if it's on, pushes will hit **GH007**. Show the user the current value and let them decide whether to update it with the commands below.
+- `NEEDS_IDENTITY` → not set; continue below.
+
+Git needs a name + email to stamp commits. **Which email depends on your GitHub
+account — not every user has email privacy on, so pick the case that fits:**
+
+- **Email privacy ON** (GitHub → Settings → Emails → *"Keep my email address
+  private"* is checked): you **must** use your GitHub **no-reply** address, or
+  every push is rejected with **GH007** (12.4). It's shown on that same Emails
+  page and looks like `12345678+yourname@users.noreply.github.com`.
+- **Email privacy OFF:** you *may* use your real email — but the no-reply address
+  still works and keeps your email out of public commit history, so it's the safe
+  default either way.
+
+**Recommended (works for everyone):** set your name and your no-reply address:
+
+[TTY]
+```bash
+git config --global user.name "Your Name"
+```
+
+[TTY]
+```bash
+git config --global user.email "12345678+yourname@users.noreply.github.com"
+```
+
+Prefer your real email and you've confirmed privacy is OFF? Substitute it in the
+second command — just know that turning privacy ON later will start rejecting
+pushes until you switch to no-reply.
+
+**After the user says they're done, verify the identity is set and flag any GH007
+risk (run yourself). The email is stamped into every public commit — it is not a
+secret — so reading it back is fine; unlike tokens, which the skill never reads:**
+
+[VERIFY]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'n=$(git config --global user.name); e=$(git config --global user.email); if [ -n "$n" ] && [ -n "$e" ]; then echo "✓ identity: $n <$e>"; case "$e" in *@users.noreply.github.com) echo "  (no-reply — safe whether or not email privacy is on)";; *) echo "  ⚠ not a no-reply address — if GitHub email privacy is ON, pushes will hit GH007 (see 12.4); switch to your no-reply address if so";; esac; else echo "✗ identity incomplete — re-run 12.3"; fi'
+```
+
+### 12.4 — If a push is rejected with `GH007` (private email)
+
+After setting the no-reply email (12.3), re-stamp the offending commit, then push:
+
+[TTY]
+```bash
+git commit --amend --reset-author --no-edit
+```
+
+Then `git push` again. If more than one commit carries the wrong address, use an
+interactive rebase (`git rebase -i`) and re-stamp each, or `git filter-repo`.
+
+**This is the end of the runbook.**
 
 ---
 
@@ -1689,6 +2299,11 @@ You **MUST NOT**:
   *command* files — they hold only flags, paths, the NetID, the host, and (on
   Windows) the public `.pub` key. The secret is always entered live at the
   prompt, never written to disk.
+- Read, `cat`, or echo any GitHub token or `gh` credential (Phase 12): not
+  `~/.config/gh/hosts.yml`, not the device-flow code, not a Personal Access
+  Token. `gh auth login` stores and uses the token itself; the user types the
+  device code into a browser on their own machine. Never paste a PAT into a
+  command you run for them — hand them the command to run themselves.
 
 If the user reports their password was leaked or something looks suspicious,
 stop and tell them to rotate their Amarel password via Rutgers OARC.
@@ -1711,12 +2326,20 @@ contents. Two modes (the script takes one argument):
   created. On top of `config`, it deletes the local `id_ed25519_amarel` key pair
   and, in one SSH call (while key auth still works), removes the skill's key from
   Amarel's `authorized_keys`, deletes the deployed `~/.vscode-server/sysroot` +
-  `sysroot.sh` (and any leftover upload), and strips the `~/.bashrc` loader block
-  — forcing **every** phase (1–9) to re-run from scratch (you'll set a new
-  passphrase, enter your Amarel password once more, and re-deploy the sysroot).
-  This is the mode the Phase 0.1 "fresh start" offer uses. The Amarel-side wipe is
-  best-effort: if key auth is already broken it's skipped, and Phases 3/7 rebuild
-  that state anyway.
+  `sysroot.sh` (and any leftover upload), strips the `~/.bashrc` loader block,
+  **removes the Phase 11 `~/.vscode-server/git-modern.sh` wrapper, and strips the
+  skill-written `git.path` and `extensions.verifySignature` keys from the remote
+  Machine `settings.json`** (so it returns to its pre-skill state — any keys you
+  added yourself are preserved) — forcing **every** phase (1–11) to re-run from
+  scratch (you'll set a new passphrase, enter your Amarel password once more,
+  re-deploy the sysroot, and re-apply the Source Control fix). This is the mode
+  the Phase 0.1 "fresh start" offer uses. The Amarel-side wipe pins the Amarel key
+  (`-i … -o IdentitiesOnly=yes`) so it runs even when your agent holds other keys or
+  no `ssh_config` block exists yet (a manual setup) — important, because if it were
+  skipped, a previously hand-applied `git.path` / `git-modern.sh` would survive and
+  make the next run look "already fixed" rather than a true clean test. It's still
+  best-effort: if key auth is genuinely broken it's skipped, and Phases 3/7/11
+  rebuild that state anyway.
 
 Substitute the real NetID for `<NetID>`. Because the reset logic is long, stage
 it to `~/.cache/amarel-vscode/reset.sh` via `[EXEC]` first (same width-budget
@@ -1731,19 +2354,50 @@ set -u
 MODE="${1:-config}"   # "config" (default) or "full" (also deletes the key pair)
 
 # 1) FULL or CONFIG: Amarel-side cleanup/dedupe first, while SSH config and keys are fully intact!
+# Pin the Amarel key with -i + IdentitiesOnly so this SSH authenticates even when the
+# ssh_config block is absent (e.g. a manual setup) or the agent holds other keys (without
+# it, several agent keys can exhaust Amarel's MaxAuthTries -> false denial -> cleanup skipped
+# -> a manually-applied git.path/git-modern.sh survives and contaminates the next test).
 if [ "$MODE" = "full" ]; then
-  if ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu '
-        sed -i.bak "/amarel-vscode/d" ~/.ssh/authorized_keys 2>/dev/null
-        rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz
-        [ -f ~/.bashrc ] && sed -i.bak -e "/# VS Code Server custom glibc workaround/d" -e "\#vscode-server/sysroot\.sh#d" ~/.bashrc
-      ' 2>/dev/null; then
-    echo "✓ Amarel: skill key, deployed sysroot, and ~/.bashrc loader removed"
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'AMAREL' 2>/dev/null
+set -u
+sed -i.bak "/amarel-vscode/d" ~/.ssh/authorized_keys 2>/dev/null
+rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz
+rm -f ~/.vscode-server/git-modern.sh
+[ -f ~/.bashrc ] && sed -i.bak -e "/# VS Code Server custom glibc workaround/d" -e "\#vscode-server/sysroot\.sh#d" ~/.bashrc
+# Return the remote Machine settings.json to its pre-skill state: drop ONLY the
+# two keys the skill wrote (git.path, extensions.verifySignature); keep user keys.
+SETTINGS="$HOME/.vscode-server/data/Machine/settings.json"
+if [ -f "$SETTINGS" ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$SETTINGS" <<'PY' 2>/dev/null || true
+import json, os, sys
+p = sys.argv[1]
+if os.path.exists(p) and os.path.getsize(p) > 0:
+    try:
+        with open(p) as f: d = json.load(f)
+    except Exception:
+        raise SystemExit(0)
+    if isinstance(d, dict):
+        for k in ("git.path", "extensions.verifySignature"): d.pop(k, None)
+        tmp = p + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(d, f, indent=4); f.write("\n")
+        os.replace(tmp, p)
+PY
+  elif command -v jq >/dev/null 2>&1; then
+    TMP="$(mktemp)"; jq 'del(."git.path", ."extensions.verifySignature")' "$SETTINGS" > "$TMP" 2>/dev/null && mv -f "$TMP" "$SETTINGS" || rm -f "$TMP"
+  fi
+fi
+AMAREL
+  then
+    echo "✓ Amarel: skill key, sysroot, ~/.bashrc loader, git-modern.sh, and git.path/verifySignature settings removed"
   else
     echo "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)"
   fi
 else
-  # CONFIG: dedupe authorized_keys on Amarel
-  if ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys' 2>/dev/null; then
+  # CONFIG: dedupe authorized_keys on Amarel (same identity-pinning rationale as above)
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys' 2>/dev/null; then
     echo "✓ Amarel authorized_keys deduped"
   else
     echo "• Skipped Amarel dedupe (key auth not set up yet — that's fine)"
@@ -1819,10 +2473,10 @@ Set-StrictMode -Version Latest
 
 # 1) FULL or CONFIG: Amarel-side cleanup/dedupe first, while SSH config and keys are fully intact!
 if ($Mode -eq 'full') {
-  & ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sed -i.bak '/amarel-vscode/d' ~/.ssh/authorized_keys 2>/dev/null; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz; [ -f ~/.bashrc ] && sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc" 2>$null
-  if ($LASTEXITCODE -eq 0) { "✓ Amarel: skill key, deployed sysroot, and ~/.bashrc loader removed" } else { "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)" }
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu "sed -i.bak '/amarel-vscode/d' ~/.ssh/authorized_keys 2>/dev/null; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz; rm -f ~/.vscode-server/git-modern.sh; [ -f ~/.bashrc ] && sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc; if command -v python3 >/dev/null 2>&1; then python3 -c 'import json,os;p=os.path.expanduser(`"~/.vscode-server/data/Machine/settings.json`");d=(json.load(open(p)) if os.path.exists(p) and os.path.getsize(p)>0 else {});d=(d if isinstance(d,dict) else {});[d.pop(k,None) for k in (`"git.path`",`"extensions.verifySignature`")];open(p,`"w`").write(json.dumps(d,indent=4)+chr(10))' 2>/dev/null; elif command -v jq >/dev/null 2>&1; then jq 'del(.`"git.path`", .`"extensions.verifySignature`")' ~/.vscode-server/data/Machine/settings.json > ~/.vscode-server/data/Machine/settings.json.tmp 2>/dev/null && mv -f ~/.vscode-server/data/Machine/settings.json.tmp ~/.vscode-server/data/Machine/settings.json; fi; true" 2>$null
+  if ($LASTEXITCODE -eq 0) { "✓ Amarel: skill key, sysroot, ~/.bashrc loader, git-modern.sh, and git.path/verifySignature settings removed" } else { "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)" }
 } else {
-  & ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys" 2>$null
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu "sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys" 2>$null
   if ($LASTEXITCODE -eq 0) { "✓ Amarel authorized_keys deduped" } else { "• Skipped Amarel dedupe (key auth not set up yet — that's fine)" }
 }
 
@@ -1902,7 +2556,7 @@ step-by-step, point them at:
 pwsh scripts/setup.ps1    # Windows
 ```
 
-The script does Phases 0–10 in sequence with the same idempotency guarantees
+The script does Phases 0–10 (plus the 9.5 git.path / Source Control step) in sequence with the same idempotency guarantees
 and the same TTY-based prompts for passwords/passphrases. It does not
 involve you (the LLM) at all. Recommend this path only if the user
 explicitly asks for it.

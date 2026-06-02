@@ -14,9 +14,14 @@ This repo deploys VS Code Remote-SSH against the Rutgers Amarel HPC cluster
 Amarel" or "fix the Remote-SSH GLIBC error":
 
 1. Read `AGENTS.md` for the full step-by-step runbook + security constraints.
-2. Walk the user through **Phases 0–10 one command at a time.** For each
+2. Walk the user through **Phases 0–12 one command at a time.** For each
    phase, give them the exact command in a fenced block, tell them the
    success marker, wait for them to paste the result, then advance.
+   (Phases 0–10 = SSH key auth + sysroot setup; **Phase 11** points VS Code at
+   a modern git on Amarel so Source Control detects repos; **Phase 12** is
+   optional GitHub auth + git identity.) **If the user is already connected and
+   only Source Control / git (or GitHub) is broken, use the Phase 0.2 fast path
+   in `AGENTS.md` to jump straight to Phase 11/12 — don't re-run Phases 1–10.**
 3. **Do not ask the user which OS they are on.** Infer it from context when
    possible; otherwise Phase 0 detects it and you branch from that output.
 4. **Do not run the scripts (`scripts/setup.sh` / `scripts/setup.ps1`)
@@ -24,6 +29,12 @@ Amarel" or "fix the Remote-SSH GLIBC error":
    ("just run it for me") — see the *Power-user path* in `AGENTS.md`.
 5. The user types all secrets (Amarel password in Phase 3, key passphrase in
    Phases 1 & 4) into the OS terminal. You never see those.
+6. **Verify, don't trust "done".** When the user says a manual step finished (a
+   `fresh` reset, the Phase 3 login, the Phase 12 `gh` login / identity), confirm
+   it with a quick read-only probe **before advancing or asking the next
+   question** — don't take "done" as proof. And skip steps already in place
+   (resume) while cleaning stale residue on a fresh start. See `AGENTS.md`
+   execution-contract point 5.
 
 **Security: you must not** read `~/.ssh/id_*` private keys, invoke `sshpass`/
 `expect`, query OS keychains, or weaken `BatchMode=yes` constraints. See
