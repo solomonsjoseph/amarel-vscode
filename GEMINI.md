@@ -51,7 +51,9 @@ If the user asks you to "install this skill" or "install this plugin":
 
 > Note: the Claude Code `/plugin marketplace add` flow is Claude-Code-specific and
 > does not apply to Gemini. The **Gemini-native** one-command install is
-> `gemini extensions install https://github.com/solomonsjoseph/amarel-vscode`
-> (or `gemini extensions link <repo>` for local dev). `./install.sh` /
-> `install.ps1` also link the repo into `~/.gemini/extensions`.
+> `gemini extensions install https://github.com/solomonsjoseph/amarel-vscode --ref main`
+> (`--ref main` because `gemini extensions install` otherwise pulls the latest GitHub
+> Release, which ships only the sysroot tarball — not this extension manifest). Use
+> `gemini extensions link <repo>` for local dev. `./install.sh` / `install.ps1` also
+> link the repo into `~/.gemini/extensions`.
 
