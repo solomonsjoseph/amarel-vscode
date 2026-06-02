@@ -1,4 +1,5 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "amarel-vscode",
   "displayName": "Amarel VS Code Skill",
   "version": "1.0.0",
@@ -7,6 +8,8 @@
     "name": "Community"
   },
   "license": "MIT",
+  "homepage": "https://github.com/solomonsjoseph/amarel-vscode",
+  "repository": "https://github.com/solomonsjoseph/amarel-vscode",
   "keywords": [
     "amarel",
     "rutgers",

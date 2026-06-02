@@ -36,26 +36,40 @@ This repo is meant to be discoverable for:
 
 ## Quick start
 
-### Claude Code or Codex (recommended)
+### Claude Code (recommended — no clone needed)
+
+```
+/plugin marketplace add solomonsjoseph/amarel-vscode
+/plugin install amarel-vscode@amarel-vscode
+```
+
+Then run `/amarel-vscode-setup`. (If the command doesn't appear yet, run
+`/reload-plugins` or restart the session.)
+
+### Codex (no clone needed)
+
+```
+codex plugin marketplace add solomonsjoseph/amarel-vscode
+```
+
+Then start Codex, run **`/plugins`** → install **amarel-vscode**, and ask:
+*"Set up VS Code Remote-SSH for me on Amarel."* (Type `@` to invoke the bundled skill.)
+
+### Gemini CLI (no clone needed)
+
+```
+gemini extensions install https://github.com/solomonsjoseph/amarel-vscode
+```
+
+Then ask: *"Set up VS Code Remote-SSH for me on Amarel."*
+
+### Cursor, Cline, or any other agent — clone and link
 
 ```bash
 git clone https://github.com/solomonsjoseph/amarel-vscode.git
 cd amarel-vscode
 ./install.sh          # macOS / Linux
 .\install.ps1         # Windows
-```
-
-Restart your session, then:
-
-- **Claude Code:** run `/amarel-vscode-setup`
-- **Codex:** ask — *"Set up VS Code Remote-SSH for me on Amarel."*
-
-### Gemini CLI, Cursor, or Cline
-
-```bash
-git clone https://github.com/solomonsjoseph/amarel-vscode.git
-cd amarel-vscode
-gemini     # — or open this folder in VS Code with Cursor / Cline active
 ```
 
 The tool auto-reads `AGENTS.md` / `GEMINI.md`. Ask:
@@ -256,6 +270,24 @@ gh release create vX.Y.Z build/vscode-sysroot-x86_64-linux-gnu.tgz \
 run the **Build and release sysroot tarball** workflow from the Actions tab.
 The workflow builds on a native x86_64 runner (avoiding the arm64/QEMU GMP
 failure on Apple Silicon) and publishes the release automatically.
+
+### Publishing to the plugin marketplace
+
+The repo is its own Claude Code plugin marketplace. Two manifests under
+`.claude-plugin/` drive it:
+
+- `.claude-plugin/marketplace.json` — the marketplace (`name: amarel-vscode`)
+  with one plugin entry whose `source` is `"./"` (the repo root).
+- `.claude-plugin/plugin.json` — the plugin manifest (`name: amarel-vscode`).
+  The `skills/amarel-vscode-setup/` skill is auto-discovered; no `skills` key
+  is needed.
+
+To cut a plugin release, bump `version` in **both** `.claude-plugin/plugin.json`
+and the `plugins[0]` entry of `.claude-plugin/marketplace.json` (keep them
+identical — `claude plugin tag` validates that they agree, and `plugin.json`
+wins silently if they differ), then commit and push. Users pick up the new
+version via `/plugin marketplace update amarel-vscode`. Validate locally with
+`claude plugin validate --strict .` before pushing.
 
 ### Keeping the runbooks in sync
 

@@ -49,3 +49,9 @@ If the user asks you to "install this skill" or "install this plugin":
    - **Windows**: Run `powershell -ExecutionPolicy Bypass -File .\install.ps1` in the terminal.
 3. Once completed, inform the user that the skill has been linked to their Gemini config/plugins directory (as well as Claude Code, Codex, etc.).
 
+> Note: the Claude Code `/plugin marketplace add` flow is Claude-Code-specific and
+> does not apply to Gemini. The **Gemini-native** one-command install is
+> `gemini extensions install https://github.com/solomonsjoseph/amarel-vscode`
+> (or `gemini extensions link <repo>` for local dev). `./install.sh` /
+> `install.ps1` also link the repo into `~/.gemini/extensions`.
+

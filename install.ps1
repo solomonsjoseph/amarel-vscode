@@ -44,10 +44,14 @@ $SkillSourceDir = Join-Path $RepoDir "skills\$SkillName"
 
 Install-Link -AgentName 'Claude Code' -SourceDir $SkillSourceDir -ParentDir (Join-Path $env:USERPROFILE '.claude\skills') -Name $SkillName
 Install-Link -AgentName 'Codex' -SourceDir $SkillSourceDir -ParentDir (Join-Path $env:USERPROFILE '.codex\skills') -Name $SkillName
-Install-Link -AgentName 'Gemini CLI' -SourceDir $RepoDir -ParentDir (Join-Path $env:USERPROFILE '.gemini\config\plugins') -Name $PluginName
+Install-Link -AgentName 'Gemini CLI' -SourceDir $RepoDir -ParentDir (Join-Path $env:USERPROFILE '.gemini\extensions') -Name $PluginName
 Install-Link -AgentName 'Agents' -SourceDir $SkillSourceDir -ParentDir (Join-Path $env:USERPROFILE '.agents\skills') -Name $SkillName
 
 Write-Host ""
 Write-Host "Restart your agent so it reloads the local skills/plugins."
+Write-Host ""
+Write-Host "Claude Code users can instead install via the plugin marketplace (no clone needed):"
+Write-Host "  /plugin marketplace add solomonsjoseph/amarel-vscode"
+Write-Host "  /plugin install amarel-vscode@amarel-vscode"
 Write-Host "Claude Code command:  /$SkillName"
 Write-Host "Gemini / Codex: ask it to set up VS Code Remote-SSH for Amarel; it will load this skill by name/description."

@@ -1,0 +1,5 @@
+{
+  "name": "amarel-vscode",
+  "version": "1.0.0",
+  "description": "Set up VS Code Remote-SSH on the Rutgers Amarel HPC cluster and fix the GLIBC 2.28 error. Bundles the amarel-vscode-setup skill; GEMINI.md is loaded as the extension context."
+}
