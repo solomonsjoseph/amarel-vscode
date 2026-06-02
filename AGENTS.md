@@ -1998,7 +1998,7 @@ if command -v python3 >/dev/null 2>&1; then
   python3 - "$SETTINGS_FILE" "$GITPATH" <<'PY' || { echo "ERR: settings.json merge failed" >&2; exit 1; }
 import json, os, sys
 path, gp = sys.argv[1], sys.argv[2]
-data = {}
+data = {"extensions.verifySignature": False}
 if os.path.exists(path) and os.path.getsize(path) > 0:
     with open(path) as f:
         try:
@@ -2021,7 +2021,7 @@ elif command -v jq >/dev/null 2>&1; then
     jq --arg gp "$GITPATH" '. + {"git.path": $gp}' "$SETTINGS_FILE" > "$TMP" \
       || { echo "ERR: $SETTINGS_FILE is not valid JSON; refusing to overwrite" >&2; exit 1; }
   else
-    jq -n --arg gp "$GITPATH" '{"git.path": $gp}' > "$TMP"
+    jq -n --arg gp "$GITPATH" '{"extensions.verifySignature": false, "git.path": $gp}' > "$TMP"
   fi
   mv -f "$TMP" "$SETTINGS_FILE"
 else
