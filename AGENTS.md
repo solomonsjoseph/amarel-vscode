@@ -2102,9 +2102,13 @@ contents. Two modes (the script takes one argument):
   added yourself are preserved) — forcing **every** phase (1–11) to re-run from
   scratch (you'll set a new passphrase, enter your Amarel password once more,
   re-deploy the sysroot, and re-apply the Source Control fix). This is the mode
-  the Phase 0.1 "fresh start" offer uses. The Amarel-side wipe is best-effort: if
-  key auth is already broken it's skipped, and Phases 3/7/11 rebuild that state
-  anyway.
+  the Phase 0.1 "fresh start" offer uses. The Amarel-side wipe pins the Amarel key
+  (`-i … -o IdentitiesOnly=yes`) so it runs even when your agent holds other keys or
+  no `ssh_config` block exists yet (a manual setup) — important, because if it were
+  skipped, a previously hand-applied `git.path` / `git-modern.sh` would survive and
+  make the next run look "already fixed" rather than a true clean test. It's still
+  best-effort: if key auth is genuinely broken it's skipped, and Phases 3/7/11
+  rebuild that state anyway.
 
 Substitute the real NetID for `<NetID>`. Because the reset logic is long, stage
 it to `~/.cache/amarel-vscode/reset.sh` via `[EXEC]` first (same width-budget
@@ -2119,8 +2123,12 @@ set -u
 MODE="${1:-config}"   # "config" (default) or "full" (also deletes the key pair)
 
 # 1) FULL or CONFIG: Amarel-side cleanup/dedupe first, while SSH config and keys are fully intact!
+# Pin the Amarel key with -i + IdentitiesOnly so this SSH authenticates even when the
+# ssh_config block is absent (e.g. a manual setup) or the agent holds other keys (without
+# it, several agent keys can exhaust Amarel's MaxAuthTries -> false denial -> cleanup skipped
+# -> a manually-applied git.path/git-modern.sh survives and contaminates the next test).
 if [ "$MODE" = "full" ]; then
-  if ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu 'bash -se' <<'AMAREL' 2>/dev/null
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'AMAREL' 2>/dev/null
 set -u
 sed -i.bak "/amarel-vscode/d" ~/.ssh/authorized_keys 2>/dev/null
 rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz
@@ -2157,8 +2165,8 @@ AMAREL
     echo "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)"
   fi
 else
-  # CONFIG: dedupe authorized_keys on Amarel
-  if ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys' 2>/dev/null; then
+  # CONFIG: dedupe authorized_keys on Amarel (same identity-pinning rationale as above)
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys' 2>/dev/null; then
     echo "✓ Amarel authorized_keys deduped"
   else
     echo "• Skipped Amarel dedupe (key auth not set up yet — that's fine)"
@@ -2234,10 +2242,10 @@ Set-StrictMode -Version Latest
 
 # 1) FULL or CONFIG: Amarel-side cleanup/dedupe first, while SSH config and keys are fully intact!
 if ($Mode -eq 'full') {
-  & ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sed -i.bak '/amarel-vscode/d' ~/.ssh/authorized_keys 2>/dev/null; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz; rm -f ~/.vscode-server/git-modern.sh; [ -f ~/.bashrc ] && sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc; if command -v python3 >/dev/null 2>&1; then python3 -c 'import json,os;p=os.path.expanduser(`"~/.vscode-server/data/Machine/settings.json`");d=(json.load(open(p)) if os.path.exists(p) and os.path.getsize(p)>0 else {});d=(d if isinstance(d,dict) else {});[d.pop(k,None) for k in (`"git.path`",`"extensions.verifySignature`")];open(p,`"w`").write(json.dumps(d,indent=4)+chr(10))' 2>/dev/null; elif command -v jq >/dev/null 2>&1; then jq 'del(.`"git.path`", .`"extensions.verifySignature`")' ~/.vscode-server/data/Machine/settings.json > ~/.vscode-server/data/Machine/settings.json.tmp 2>/dev/null && mv -f ~/.vscode-server/data/Machine/settings.json.tmp ~/.vscode-server/data/Machine/settings.json; fi; true" 2>$null
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu "sed -i.bak '/amarel-vscode/d' ~/.ssh/authorized_keys 2>/dev/null; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz; rm -f ~/.vscode-server/git-modern.sh; [ -f ~/.bashrc ] && sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc; if command -v python3 >/dev/null 2>&1; then python3 -c 'import json,os;p=os.path.expanduser(`"~/.vscode-server/data/Machine/settings.json`");d=(json.load(open(p)) if os.path.exists(p) and os.path.getsize(p)>0 else {});d=(d if isinstance(d,dict) else {});[d.pop(k,None) for k in (`"git.path`",`"extensions.verifySignature`")];open(p,`"w`").write(json.dumps(d,indent=4)+chr(10))' 2>/dev/null; elif command -v jq >/dev/null 2>&1; then jq 'del(.`"git.path`", .`"extensions.verifySignature`")' ~/.vscode-server/data/Machine/settings.json > ~/.vscode-server/data/Machine/settings.json.tmp 2>/dev/null && mv -f ~/.vscode-server/data/Machine/settings.json.tmp ~/.vscode-server/data/Machine/settings.json; fi; true" 2>$null
   if ($LASTEXITCODE -eq 0) { "✓ Amarel: skill key, sysroot, ~/.bashrc loader, git-modern.sh, and git.path/verifySignature settings removed" } else { "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)" }
 } else {
-  & ssh -o BatchMode=yes -o ConnectTimeout=5 <NetID>@amarel.rutgers.edu "sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys" 2>$null
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu "sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys" 2>$null
   if ($LASTEXITCODE -eq 0) { "✓ Amarel authorized_keys deduped" } else { "• Skipped Amarel dedupe (key auth not set up yet — that's fine)" }
 }
 
