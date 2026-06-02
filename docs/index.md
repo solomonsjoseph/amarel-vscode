@@ -32,7 +32,7 @@ Then run `/plugins` in the Codex TUI → install **amarel-vscode**.
 **Gemini CLI (no clone):**
 
 ```
-gemini extensions install https://github.com/solomonsjoseph/amarel-vscode
+gemini extensions install https://github.com/solomonsjoseph/amarel-vscode --ref main
 ```
 
 **Cursor, Cline, or no LLM — clone and link:**
