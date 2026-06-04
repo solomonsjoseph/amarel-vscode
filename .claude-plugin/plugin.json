@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "amarel-vscode",
   "displayName": "Amarel VS Code Skill",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Amarel VS Code Skill for Rutgers Amarel: set up VS Code Remote-SSH and fix the GLIBC 2.28 error. Works with Claude Code, Codex, or no LLM.",
   "author": {
     "name": "Community"

@@ -25,14 +25,17 @@ for a copy-paste prompt.
 
 ## What this repo does
 
-Sets up VS Code Remote-SSH against the **Rutgers Amarel HPC cluster** (CentOS 7,
-glibc 2.17) using a custom-glibc sysroot. VS Code Server 1.99+ requires glibc 2.28
-which CentOS 7 cannot provide, so we install a tarball with glibc 2.28 +
-libstdc++ + patchelf into the user's `$HOME` on Amarel and wire `~/.bashrc` to
-point VS Code at it. Once connected, **Phase 11** also fixes the Source Control
-"no Git repository" failure (CentOS 7's git 1.8.3.1 is too old for VS Code's repo
-probe) by pointing `git.path` at a modern git on Amarel, and **Phase 12**
-optionally wires up GitHub auth + identity.
+Sets up VS Code Remote-SSH against the **Rutgers Amarel HPC cluster**. Amarel is
+migrating from CentOS 7 (glibc 2.17) to **RHEL 9.6 (glibc 2.34)** on the new host
+`amarel-new.hpc.rutgers.edu`. VS Code Server 1.99+ requires glibc 2.28, which
+CentOS 7 cannot provide — so on the **legacy CentOS 7 host** we install a tarball
+with glibc 2.28 + libstdc++ + patchelf into the user's `$HOME` and wire
+`~/.bashrc` to point VS Code at it; on **RHEL 9.6** VS Code Server runs natively
+and the sysroot is skipped (**Phase 5.5** detects which and routes). Once
+connected, **Phase 11** also fixes the Source Control "no Git repository" failure
+(legacy CentOS 7's git 1.8.3.1 is too old for VS Code's repo probe; RHEL 9.6's git
+~2.43 passes natively) by pointing `git.path` at a modern git when needed, and
+**Phase 12** optionally wires up GitHub auth + identity.
 
 ---
 
@@ -42,13 +45,13 @@ optionally wires up GitHub auth + identity.
 > 1. This skill executes `[EXEC]` steps autonomously via its Bash tool; it never asks the user to run them.
 > 2. All `[EXEC]` steps are noninteractive: SSH/SCP calls use `-o BatchMode=yes`; no interactive prompts are expected. **Key-auth denial scope (Phases 1–5):** before the key is loaded into the agent (Phase 4.1), the **skip probes** (Phase 1.0 Gate-1 and Phase 3.0) return `Permission denied (publickey,…)` *by construction* — this is an **expected routing signal**, not a failure (Phase 1.0 silences this probe's stderr; only its exit code routes SKIP/PROCEED). Treat an auth failure as a hard failure to escalate only (a) on any `[EXEC]` step in Phases 6–12, or (b) in Phases 1–5 if a denial persists **after** Phase 4.2 confirms the key is loaded (e.g. the Phase 4.2.1 dedupe should succeed once the key is loaded). Never re-run a `[TTY]` password/passphrase step (e.g. Phase 3.1) in response to an expected pre-load denial. Any *non-auth* error (network, missing tool, unexpected output) is always surfaced.
 > 3. Key state discovered during execution (`LOCAL_OS`, `NetID`, `REPO_ROOT`, `USE_TARBALL`) is recorded at the phase that first establishes it and reused in all subsequent phases without re-deriving.
-> 4. **Host lock:** The only target is `amarel.rutgers.edu`. Do not substitute any other hostname — not `amarel2.rutgers.edu`, not any other `*.rutgers.edu` host. Every `<NetID>@amarel.rutgers.edu` in this skill is a literal target, not a template.
+> 4. **Host lock (transition period):** Two valid targets — the new **`amarel-new.hpc.rutgers.edu`** (RHEL 9.6, the default this runbook uses) and the legacy **`amarel.rutgers.edu`** (CentOS 7, being retired). Commands below are written for `amarel-new.hpc.rutgers.edu`; if the user is deliberately on the legacy host, substitute `amarel.rutgers.edu` in every command. Do **not** substitute any *other* hostname — not `amarel2.rutgers.edu`, not any other `*.rutgers.edu` host. Phase 5.5 auto-detects the remote glibc and routes the sysroot work accordingly, so whichever of the two hosts the user targets is handled correctly.
 > 5. **Verify; never take "done" on faith.** When a step hands off to the user (a `[TTY]` command, a GUI action, a `fresh` reset, a `gh` login) and they reply "done", run a read-only probe to confirm the *actual* outcome **before you advance or ask the next question** — the user saying it worked is not proof it worked. And before running any step, probe whether its outcome is already in place: if it is, **skip** it (a resume); if stale residue from a prior run remains where a `fresh` start should have cleaned it, **remove it first**. The skip-probes (Phases 1, 3, 4, 7, 9, 11, 12) already embody this — extend the same discipline to every hand-off, including the reset and the GitHub steps that historically advanced on the user's word alone.
 
 **Two entry modes — decide before Phase 0.**
 - **Full setup** (first-time VS Code-on-Amarel): run Phases 0 → 12 in order.
 - **Targeted repair** (the user is *already connected* — status bar shows
-  `SSH: amarel.rutgers.edu` — and only reports a **Source Control** problem
+  `SSH: amarel-new.hpc.rutgers.edu` — and only reports a **Source Control** problem
   ["no Git repository", the repo won't sync, "Initialize Repository" keeps
   appearing] or a **GitHub** push/auth problem): still run **Phase 0**
   (preflight), then **Phase 0.2** confirms key auth and routes you **straight to
@@ -150,7 +153,7 @@ The complete human touch-point list — everything not on this list is `[EXEC]`:
 |---|---|---|---|---|
 | 1 | 1.2 | `ssh-keygen -t ed25519 …` | Passphrase prompt on TTY — LLM cannot see | All |
 | 2 | 3.1 | `bash ~/.cache/amarel-vscode/step-3.1.sh` (staged ssh-copy-id) | **⚠ LAST AMAREL PASSWORD EVER** — password on TTY | All |
-| 3 | 3.1.1 | `ssh -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu` | Key passphrase on TTY; confirms key installed | All |
+| 3 | 3.1.1 | `ssh -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu` | Key passphrase on TTY; confirms key installed | All |
 | 4 | 4.1 | `ssh-add --apple-use-keychain …` / `ssh-add …` | Passphrase to agent on TTY | All |
 | 5 | 10 | VS Code GUI — click Allow, watch status bar | No Bash equivalent | All |
 
@@ -175,11 +178,14 @@ one-line description), but this is the orientation that makes the rest make sens
 >    times (one extra on Windows): set a key passphrase, type your Amarel password
 >    **once** (your last time ever), do a test login, and save the passphrase to
 >    your keychain.
-> 2. **The GLIBC fix (Phases 6–8)** — I download a small "sysroot" (a newer glibc
->    bundle) into your Amarel home and point VS Code Server at it. This is what
->    clears the `GLIBC >= 2.28` error. I run all of this for you.
-> 3. **Connect (Phases 9–10)** — I flip one VS Code setting on Amarel, then you
->    connect from VS Code's **Remote-SSH** menu.
+> 2. **The GLIBC fix (Phases 6–8, legacy CentOS 7 only)** — on the old host I
+>    download a small "sysroot" (a newer glibc bundle) into your Amarel home and
+>    point VS Code Server at it, which clears the `GLIBC >= 2.28` error. **On the
+>    new RHEL 9 host (amarel-new) Phase 5.5 auto-detects this and skips it** —
+>    nothing to install.
+> 3. **Connect (Phases 9–10)** — on the legacy host I flip one VS Code setting,
+>    then you connect from VS Code's **Remote-SSH** menu (on RHEL 9 you just
+>    connect — no setting needed).
 > 4. **Git & GitHub (Phases 11–12, optional)** — if you'll use Source Control, I
 >    point VS Code at a modern git on Amarel; Phase 12 wires up GitHub if you push
 >    from Amarel.
@@ -223,7 +229,7 @@ esac
 for c in ssh scp ssh-keygen ssh-add ssh-copy-id ssh-keyscan nc; do
   command -v "$c" >/dev/null && echo "✓ $c" || echo "✗ $c MISSING"
 done
-nc -z -w 5 amarel.rutgers.edu 22 && echo "✓ VPN: Amarel reachable" || echo "✗ VPN: cannot reach amarel.rutgers.edu:22"
+nc -z -w 5 amarel-new.hpc.rutgers.edu 22 && echo "✓ VPN: Amarel reachable" || echo "✗ VPN: cannot reach amarel-new.hpc.rutgers.edu:22"
 ```
 
 **Windows PowerShell — run yourself:**
@@ -234,7 +240,7 @@ if ($IsWindows) { "✓ OS: Windows" } else { "✗ OS: not Windows" }
 foreach ($c in 'ssh','scp','ssh-keygen','ssh-add','ssh-keyscan') {
   if (Get-Command $c -ErrorAction SilentlyContinue) { "✓ $c" } else { "✗ $c MISSING" }
 }
-if (Test-NetConnection amarel.rutgers.edu -Port 22 -InformationLevel Quiet) { "✓ VPN: Amarel reachable" } else { "✗ VPN: cannot reach amarel.rutgers.edu:22" }
+if (Test-NetConnection amarel-new.hpc.rutgers.edu -Port 22 -InformationLevel Quiet) { "✓ VPN: Amarel reachable" } else { "✗ VPN: cannot reach amarel-new.hpc.rutgers.edu:22" }
 ```
 
 **Success:** the OS line is `✓ OS: macOS`, `✓ OS: Linux`, or `✓ OS: Windows`,
@@ -298,8 +304,8 @@ plainly what, if anything, the reset could not reach:
 ```bash
 echo "Post-reset cleanliness check:"
 test -f ~/.ssh/id_ed25519_amarel && echo "  ✗ local key pair still present" || echo "  ✓ local key pair removed"
-ssh -G amarel.rutgers.edu 2>/dev/null | grep -qE '^identityfile.*id_ed25519_amarel' && echo "  ✗ ssh_config amarel block still present" || echo "  ✓ ssh_config amarel block removed"
-grep -qE '^amarel\.rutgers\.edu ' ~/.ssh/known_hosts 2>/dev/null && echo "  ✗ known_hosts amarel entry still present" || echo "  ✓ known_hosts amarel entry removed"
+ssh -G amarel-new.hpc.rutgers.edu 2>/dev/null | grep -qE '^identityfile.*id_ed25519_amarel' && echo "  ✗ ssh_config amarel block still present" || echo "  ✓ ssh_config amarel block removed"
+grep -qE '^amarel(-new\.hpc)?\.rutgers\.edu ' ~/.ssh/known_hosts 2>/dev/null && echo "  ✗ known_hosts amarel entry still present" || echo "  ✓ known_hosts amarel entry removed"
 grep -q 'id_ed25519_amarel' ~/.zshrc 2>/dev/null && echo "  ✗ ~/.zshrc loader still present" || echo "  ✓ ~/.zshrc loader removed"
 ```
 
@@ -309,8 +315,8 @@ grep -q 'id_ed25519_amarel' ~/.zshrc 2>/dev/null && echo "  ✗ ~/.zshrc loader 
 ```powershell
 "Post-reset cleanliness check:"
 if (Test-Path "$HOME\.ssh\id_ed25519_amarel") { "  ✗ local key pair still present" } else { "  ✓ local key pair removed" }
-if ((ssh -G amarel.rutgers.edu 2>$null) -match 'identityfile.*id_ed25519_amarel') { "  ✗ ssh_config amarel block still present" } else { "  ✓ ssh_config amarel block removed" }
-if ((Get-Content "$HOME\.ssh\known_hosts" -ErrorAction SilentlyContinue) -match '^amarel\.rutgers\.edu ') { "  ✗ known_hosts amarel entry still present" } else { "  ✓ known_hosts amarel entry removed" }
+if ((ssh -G amarel-new.hpc.rutgers.edu 2>$null) -match 'identityfile.*id_ed25519_amarel') { "  ✗ ssh_config amarel block still present" } else { "  ✓ ssh_config amarel block removed" }
+if ((Get-Content "$HOME\.ssh\known_hosts" -ErrorAction SilentlyContinue) -match '^amarel(-new\.hpc)?\.rutgers\.edu ') { "  ✗ known_hosts amarel entry still present" } else { "  ✓ known_hosts amarel entry removed" }
 ```
 
 - **All `✓`** → the local side is clean; begin Phase 1.
@@ -336,7 +342,7 @@ Substitute the user's NetID, then probe key auth (run yourself):
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu true && echo "READY" || echo "NEEDS_SETUP"
+ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu true && echo "READY" || echo "NEEDS_SETUP"
 ```
 
 - `READY` → passwordless SSH works (the same auth VS Code Remote-SSH uses), so
@@ -374,11 +380,11 @@ agent keys ssh offers).
 # a pre-setup "Permission denied"/"Host key verification failed" here is normal)
 ssh -o BatchMode=yes -o ConnectTimeout=5 \
     -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes \
-    <NetID>@amarel.rutgers.edu true 2>/dev/null
+    <NetID>@amarel-new.hpc.rutgers.edu true 2>/dev/null
 KEY_OK=$?
 
 # Gate 2: ssh_config block has all required keys
-CFG=$(ssh -G amarel.rutgers.edu 2>/dev/null)
+CFG=$(ssh -G amarel-new.hpc.rutgers.edu 2>/dev/null)
 echo "$CFG" | grep -qE '^identityfile.*id_ed25519_amarel' && \
 echo "$CFG" | grep -qE '^identitiesonly yes' && \
 echo "$CFG" | grep -qE '^addkeystoagent yes' && \
@@ -397,9 +403,9 @@ fi
 ```powershell
 & ssh -o BatchMode=yes -o ConnectTimeout=5 `
     -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes `
-    "<NetID>@amarel.rutgers.edu" true 2>&1 | Out-Null
+    "<NetID>@amarel-new.hpc.rutgers.edu" true 2>&1 | Out-Null
 $keyOk = ($LASTEXITCODE -eq 0)
-$cfg = & ssh -G amarel.rutgers.edu 2>$null
+$cfg = & ssh -G amarel-new.hpc.rutgers.edu 2>$null
 $configOk = ($cfg -match 'identityfile.*id_ed25519_amarel') -and
             ($cfg -match 'identitiesonly yes') -and
             ($cfg -match 'addkeystoagent yes') -and
@@ -475,7 +481,7 @@ MITM on first connection.
 
 [EXEC]
 ```bash
-grep -qE "^amarel\.rutgers\.edu " ~/.ssh/known_hosts 2>/dev/null && echo "ALREADY TRUSTED — skip Phase 2" || echo "NEEDS VERIFICATION"
+grep -qE "^amarel(-new\.hpc)?\.rutgers\.edu " ~/.ssh/known_hosts 2>/dev/null && echo "ALREADY TRUSTED — skip Phase 2" || echo "NEEDS VERIFICATION"
 ```
 
 If `ALREADY TRUSTED`, skip to Phase 3.
@@ -491,7 +497,7 @@ the same file.
 
 [EXEC]
 ```bash
-ssh-keyscan -t ed25519 amarel.rutgers.edu 2>/dev/null > ~/.ssh/amarel_hostkey.pending
+ssh-keyscan -t ed25519 amarel-new.hpc.rutgers.edu 2>/dev/null > ~/.ssh/amarel_hostkey.pending
 ssh-keygen -lf ~/.ssh/amarel_hostkey.pending
 ```
 
@@ -499,7 +505,7 @@ ssh-keygen -lf ~/.ssh/amarel_hostkey.pending
 
 [EXEC]
 ```powershell
-ssh-keyscan -t ed25519 amarel.rutgers.edu 2>$null | Set-Content "$HOME\.ssh\amarel_hostkey.pending"
+ssh-keyscan -t ed25519 amarel-new.hpc.rutgers.edu 2>$null | Set-Content "$HOME\.ssh\amarel_hostkey.pending"
 ssh-keygen -lf "$HOME\.ssh\amarel_hostkey.pending"
 ```
 
@@ -508,16 +514,24 @@ ssh-keygen -lf "$HOME\.ssh\amarel_hostkey.pending"
 ### 2.2 — User fingerprint verification
 
 > **🔒 YOUR TURN:** Compare the `SHA256:…` value above against Rutgers OARC's
-> published fingerprint. The reference fingerprint recorded on 2026-05-26 is:
+> published fingerprint.
 >
-> ```
-> SHA256:cN6l3kR3jbdOv6Ofz1b+KNCt3LaOCj9bq6yeHoR3eLs
-> ```
+> - **Legacy host `amarel.rutgers.edu` (CentOS 7):** the reference fingerprint
+>   recorded on 2026-05-26 is:
 >
-> **Only continue if your output matches. A mismatch means a possible
-> man-in-the-middle attack — STOP and contact OARC.**
+>   ```
+>   SHA256:cN6l3kR3jbdOv6Ofz1b+KNCt3LaOCj9bq6yeHoR3eLs
+>   ```
 >
-> If OARC confirms the host key was legitimately rotated and gives you the new
+> - **New host `amarel-new.hpc.rutgers.edu` (RHEL 9.6):** a *different machine
+>   with a different host key* — the pin above does **not** apply. No reference
+>   is recorded yet; verify the scanned value directly against OARC's published
+>   fingerprint for amarel-new. *(Maintainer: pin it here once known.)*
+>
+> **Only continue if your output matches the correct host's value. A mismatch
+> means a possible man-in-the-middle attack — STOP and contact OARC.**
+>
+> If OARC confirms a host key was legitimately rotated and gives you the new
 > fingerprint out-of-band, replace the reference value above with the confirmed
 > one and re-run Phase 2. Never update the pin just because it stopped matching.
 
@@ -552,7 +566,7 @@ so future logins use the key instead of a password.
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu true 2>/dev/null && echo "ALREADY WORKS — skip Phase 3" || echo "NEEDS key install"
+ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu true 2>/dev/null && echo "ALREADY WORKS — skip Phase 3" || echo "NEEDS key install"
 ```
 
 If `ALREADY WORKS`, skip to Phase 4.
@@ -567,7 +581,7 @@ stage it to a short wrapper first (run yourself):
 mkdir -p ~/.cache/amarel-vscode
 cat > ~/.cache/amarel-vscode/step-3.1.sh <<'EOF'
 #!/usr/bin/env bash
-ssh-copy-id -i ~/.ssh/id_ed25519_amarel.pub -o PreferredAuthentications=password -o PubkeyAuthentication=no <NetID>@amarel.rutgers.edu 2>&1 | grep -Ev "^Now try|^and check to make sure"
+ssh-copy-id -i ~/.ssh/id_ed25519_amarel.pub -o PreferredAuthentications=password -o PubkeyAuthentication=no <NetID>@amarel-new.hpc.rutgers.edu 2>&1 | grep -Ev "^Now try|^and check to make sure"
 exit "${PIPESTATUS[0]}"
 EOF
 ```
@@ -607,7 +621,7 @@ mkdir -p ~/.ssh && chmod 700 ~/.ssh
 touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
 grep -qxF "`$KEY" ~/.ssh/authorized_keys || printf '%s\n' "`$KEY" >> ~/.ssh/authorized_keys
 "@
-Get-Content -Raw "$HOME\.ssh\id_ed25519_amarel.pub" | & ssh -tt -o PreferredAuthentications=password -o PubkeyAuthentication=no "<NetID>@amarel.rutgers.edu" $remoteCmd
+Get-Content -Raw "$HOME\.ssh\id_ed25519_amarel.pub" | & ssh -tt -o PreferredAuthentications=password -o PubkeyAuthentication=no "<NetID>@amarel-new.hpc.rutgers.edu" $remoteCmd
 '@ | Set-Content -Path "$dir\step-3.1.ps1" -Encoding UTF8
 ```
 
@@ -630,14 +644,14 @@ pwsh -ep Bypass -File "$env:LOCALAPPDATA\amarel-vscode\step-3.1.ps1"
 
 [TTY]
 ```bash
-ssh -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu
+ssh -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu
 ```
 
 **Windows PowerShell — copy this:**
 
 [TTY]
 ```powershell
-ssh -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes "<NetID>@amarel.rutgers.edu"
+ssh -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes "<NetID>@amarel-new.hpc.rutgers.edu"
 ```
 
 > SSH will prompt for your **key passphrase** (the one you set in Phase 1.2 — not your Amarel password). Enter it and check the result:
@@ -790,7 +804,7 @@ copies). `sort -u` is idempotent:
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
+ssh -o BatchMode=yes -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
 ```
 
 **`-i … -o IdentitiesOnly=yes` is load-bearing here.** `ssh_config` isn't written
@@ -810,13 +824,13 @@ to Phase 4.3.
 - macOS/Linux: `~/.ssh/config`
 - Windows: `$HOME\.ssh\config`
 
-**Parse any existing `Host amarel.rutgers.edu` block first:**
+**Parse any existing `Host amarel-new.hpc.rutgers.edu` block first:**
 
 **macOS/Linux:**
 
 [EXEC]
 ```bash
-awk '/^Host amarel\.rutgers\.edu/{f=1;print;next} /^Host /{f=0} f' ~/.ssh/config 2>/dev/null || true
+awk '/^Host amarel(-new\.hpc)?\.rutgers\.edu/{f=1;print;next} /^Host /{f=0} f' ~/.ssh/config 2>/dev/null || true
 ```
 
 (Do **not** use an awk range like `/^Host amarel…/,/^Host [^ ]/` — the start line
@@ -830,7 +844,7 @@ line and you never see the block body.)
 $lines = Get-Content "$HOME\.ssh\config" -ErrorAction SilentlyContinue
 $inBlock = $false
 foreach ($l in $lines) {
-  if ($l -match '^Host amarel\.rutgers\.edu') { $inBlock = $true }
+  if ($l -match '^Host amarel(-new\.hpc)?\.rutgers\.edu') { $inBlock = $true }
   elseif ($l -match '^Host ' -and $inBlock) { $inBlock = $false }
   if ($inBlock) { $l }
 }
@@ -838,13 +852,13 @@ foreach ($l in $lines) {
 
 **Decision logic:**
 
-- **If no `Host amarel.rutgers.edu` block exists** → append the canonical block below.
+- **If no `Host amarel-new.hpc.rutgers.edu` block exists** → append the canonical block below.
 - **If a block exists but is missing or has wrong values for `User`, `IdentityFile`, `IdentitiesOnly`, `AddKeysToAgent`, `ControlMaster`, or (macOS only) `UseKeychain`** → surface the diff to the user and ask them to edit the file manually (do not blindly overwrite — they may have custom `ProxyCommand`, `LocalForward`, etc.). Re-verify after user "done".
 
 **Canonical block to append if absent:**
 
 ```
-Host amarel.rutgers.edu
+Host amarel-new.hpc.rutgers.edu
     User <NetID>
     IdentityFile ~/.ssh/id_ed25519_amarel
     IdentitiesOnly yes
@@ -863,7 +877,7 @@ Host amarel.rutgers.edu
 ```bash
 cat >> ~/.ssh/config <<'EOF'
 
-Host amarel.rutgers.edu
+Host amarel-new.hpc.rutgers.edu
     User <NetID>
     IdentityFile ~/.ssh/id_ed25519_amarel
     IdentitiesOnly yes
@@ -881,7 +895,7 @@ chmod 600 ~/.ssh/config
 **Append command (Windows PowerShell):**
 
 Follows the same parse → diff → ask logic as macOS/Linux above. If the
-`Host amarel.rutgers.edu` block is absent, append; if it is present with
+`Host amarel-new.hpc.rutgers.edu` block is absent, append; if it is present with
 mismatching values, surface the diff and ask the user to edit manually.
 Note: `UseKeychain yes` is **macOS-only** and is OMITTED on Windows. `ControlMaster` is not supported on Windows OpenSSH — omit all three Control* lines on Windows.
 
@@ -889,7 +903,7 @@ Note: `UseKeychain yes` is **macOS-only** and is OMITTED on Windows. `ControlMas
 ```powershell
 $cfg = @"
 
-Host amarel.rutgers.edu
+Host amarel-new.hpc.rutgers.edu
     User <NetID>
     IdentityFile ~/.ssh/id_ed25519_amarel
     IdentitiesOnly yes
@@ -906,13 +920,13 @@ manually, or run `Repair-AuthorizedKeyPermission`.
 **Verify resolved config on all OSes (run yourself):**
 
 [VERIFY]
-Command:  ssh -G amarel.rutgers.edu | grep -E …
+Command:  ssh -G amarel-new.hpc.rutgers.edu | grep -E …
 Pass:     all five lines present: user <NetID>, identityfile id_ed25519_amarel, identitiesonly yes, addkeystoagent yes, controlmaster auto
 Fail:     any of the five lines missing or wrong value
 On fail:  re-edit ~/.ssh/config per decision logic above; re-verify
 Advance:  Phase 4.4 (macOS) or Phase 5 (Linux/Windows)
 ```bash
-ssh -G amarel.rutgers.edu | grep -E '^(user|identityfile|identitiesonly|addkeystoagent|controlmaster) '
+ssh -G amarel-new.hpc.rutgers.edu | grep -E '^(user|identityfile|identitiesonly|addkeystoagent|controlmaster) '
 ```
 
 Must show `user <NetID>`, `identityfile ~/.ssh/id_ed25519_amarel`,
@@ -965,24 +979,24 @@ grep -q 'id_ed25519_amarel' ~/.zshrc && echo "✓ ~/.zshrc updated" || echo "✗
 This is what VS Code's Remote-SSH will use. **Run yourself.**
 
 [VERIFY]
-Command:  ssh -o BatchMode=yes -o ConnectTimeout=10 amarel.rutgers.edu 'echo ok; hostname; whoami'
-Pass:     three lines: "ok", Amarel hostname (e.g. amarel1.amarel.rutgers.edu), NetID
+Command:  ssh -o BatchMode=yes -o ConnectTimeout=10 amarel-new.hpc.rutgers.edu 'echo ok; hostname; whoami'
+Pass:     three lines: "ok", Amarel hostname (e.g. amarel1.amarel-new.hpc.rutgers.edu), NetID
 Fail:     hangs, "Permission denied", or fewer than three lines
 On fail:  re-run Phase 4.2 verify and Phase 4.3 ssh_config validation
 Advance:  Phase 6
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=10 amarel.rutgers.edu 'echo ok; hostname; whoami'
+ssh -o BatchMode=yes -o ConnectTimeout=10 amarel-new.hpc.rutgers.edu 'echo ok; hostname; whoami'
 ```
 
 **Success:** three lines — `ok`, an Amarel login-node hostname (e.g.
-`amarel1.amarel.rutgers.edu`), and the NetID.
+`amarel1.amarel-new.hpc.rutgers.edu`), and the NetID.
 
 **If it hangs or errors:** key auth is not fully working. Re-run Phase 4.2
 verify and Phase 4.3 ssh_config validation. For a deeper diagnostic, **hand
 the user** this command — it is interactive (no `BatchMode`), so they (not
 the agent) run it to surface a real password prompt or full handshake trace:
 
-> **🔒 YOUR TURN — diagnostic only:** `ssh -v amarel.rutgers.edu` (interactive; shows the full SSH handshake)
+> **🔒 YOUR TURN — diagnostic only:** `ssh -v amarel-new.hpc.rutgers.edu` (interactive; shows the full SSH handshake)
 
 If their output shows `Authentications that can continue: publickey,…` and
 then fails, the `authorized_keys` permissions on Amarel are wrong — the
@@ -990,14 +1004,48 @@ agent can fix that autonomously:
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'chmod 600 ~/.ssh/authorized_keys; chmod 700 ~/.ssh'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'chmod 600 ~/.ssh/authorized_keys; chmod 700 ~/.ssh'
 ```
 
 **Wait for the three success lines, then advance.**
 
 ---
 
+## Phase 5.5 — Detect the remote platform (choose native vs legacy)
+
+**Goal:** Amarel is mid-migration from **CentOS 7.9 (glibc 2.17)** to **RHEL 9.6
+(glibc 2.34)**. VS Code Server 1.99+ needs glibc ≥ 2.28, so the custom-glibc
+sysroot (Phases 6–8) and the signature workaround (Phase 9) are needed **only on
+the legacy CentOS 7 host**. Decide which host the user is on by probing the
+**remote glibc** (not the hostname), then route. **Run this yourself.**
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'ldd --version 2>/dev/null | head -1; . /etc/os-release 2>/dev/null; printf "OSREL=%s-%s\n" "${ID:-?}" "${VERSION_ID:-?}"'
+```
+
+Read the glibc version from the first line (e.g. `ldd (GNU libc) 2.34`):
+
+- **glibc ≥ 2.28 → `PLATFORM=NATIVE` (RHEL 9).** **Skip Phases 6, 7, 8, and 9
+  entirely** — there is no sysroot to install and no signature workaround to
+  apply. Go straight to **Phase 10** (Connect), then **Phase 11** (Source
+  Control) and optional **Phase 12**.
+- **glibc < 2.28 → `PLATFORM=LEGACY` (CentOS 7).** Continue with Phase 6 as
+  written.
+- **Probe inconclusive** (no glibc line, or an SSH hiccup): default to
+  **LEGACY** and say so — installing the sysroot on an RHEL 9 host is harmless
+  (at worst unused), whereas skipping it on a real CentOS 7 host is not.
+
+> **Why route on glibc, not the hostname?** During the transition a DNS alias may
+> resolve either way; the glibc version is what VS Code Server actually gates on,
+> so it is the reliable signal. Record `PLATFORM` and reuse it in Phases 6–11.
+
+---
+
 ## Phase 6 — Locate the sysroot tarball
+
+> **⚙️ Legacy CentOS 7 only — auto-skipped on RHEL 9.6.** If Phase 5.5 reported
+> `PLATFORM=NATIVE`, skip Phases 6–9 and continue at **Phase 10**.
 
 **Goal:** Find a valid sysroot tarball locally before downloading. **Run
 all probes yourself.**
@@ -1221,6 +1269,8 @@ if ($LASTEXITCODE -eq 0) { "✓ tarball is well-formed" } else { "✗ tarball is
 
 ## Phase 7 — Deploy the sysroot on Amarel
 
+> **⚙️ Legacy CentOS 7 only — auto-skipped on RHEL 9.6** (Phase 5.5 `PLATFORM=NATIVE`).
+
 **Goal:** Upload the tarball and `assets/sysroot.sh`, extract into
 `~/.vscode-server/sysroot/`, run hard verification gates, and auto-remediate
 any failures. **All autonomous `ssh`/`scp` from here use `-o BatchMode=yes`.**
@@ -1236,14 +1286,14 @@ any failures. **All autonomous `ssh`/`scp` from here use `-o BatchMode=yes`.**
 
 [EXEC]
 ```bash
-scp -o BatchMode=yes "$REPO_ROOT/build/vscode-sysroot-x86_64-linux-gnu.tgz" <NetID>@amarel.rutgers.edu:~/
+scp -o BatchMode=yes "$REPO_ROOT/build/vscode-sysroot-x86_64-linux-gnu.tgz" <NetID>@amarel-new.hpc.rutgers.edu:~/
 ```
 
 **Windows PowerShell:**
 
 [EXEC]
 ```powershell
-scp -o BatchMode=yes "$REPO_ROOT\build\vscode-sysroot-x86_64-linux-gnu.tgz" "<NetID>@amarel.rutgers.edu:~/"
+scp -o BatchMode=yes "$REPO_ROOT\build\vscode-sysroot-x86_64-linux-gnu.tgz" "<NetID>@amarel-new.hpc.rutgers.edu:~/"
 ```
 
 ### 7.2 — Upload sysroot.sh (run yourself)
@@ -1252,14 +1302,14 @@ scp -o BatchMode=yes "$REPO_ROOT\build\vscode-sysroot-x86_64-linux-gnu.tgz" "<Ne
 
 [EXEC]
 ```bash
-scp -o BatchMode=yes "$REPO_ROOT/assets/sysroot.sh" <NetID>@amarel.rutgers.edu:~/
+scp -o BatchMode=yes "$REPO_ROOT/assets/sysroot.sh" <NetID>@amarel-new.hpc.rutgers.edu:~/
 ```
 
 **Windows PowerShell:**
 
 [EXEC]
 ```powershell
-scp -o BatchMode=yes "$REPO_ROOT\assets\sysroot.sh" "<NetID>@amarel.rutgers.edu:~/"
+scp -o BatchMode=yes "$REPO_ROOT\assets\sysroot.sh" "<NetID>@amarel-new.hpc.rutgers.edu:~/"
 ```
 
 ### 7.3 — Fallback: fetch sysroot.sh via curl if 7.2 fails (run yourself)
@@ -1269,7 +1319,7 @@ fetch it directly on Amarel and verify its content before installing:
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'REMOTE'
 set -euo pipefail
 curl -fsSL https://raw.githubusercontent.com/ursetto/vscode-sysroot/main/sysroot.sh -o ~/sysroot.sh
 # Reject anything missing the expected 3-export shape (defense vs upstream compromise)
@@ -1295,7 +1345,7 @@ agent can route without parsing version strings:
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'REMOTE'
 set -uo pipefail
 test -f ~/.vscode-server/sysroot/lib/ld-linux-x86-64.so.2 || { echo NEEDS_INSTALL; exit 0; }
 test -f ~/.vscode-server/sysroot.sh                       || { echo NEEDS_INSTALL; exit 0; }
@@ -1321,7 +1371,7 @@ On explicit user "yes":
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'REMOTE'
 set -euo pipefail
 [ -d "$HOME/.vscode-server" ] && chmod -R u+w "$HOME/.vscode-server" 2>/dev/null || true
 rm -rf "$HOME/.vscode-server" "$HOME/.vscode-server-insiders" "$HOME/.vscode-cli"
@@ -1332,7 +1382,7 @@ REMOTE
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'REMOTE'
 set -euo pipefail
 mkdir -p "$HOME/.vscode-server"
 tar zxf "$HOME/vscode-sysroot-x86_64-linux-gnu.tgz" -C "$HOME/.vscode-server"
@@ -1360,7 +1410,7 @@ Fail:     "FAIL: <gate-names>" on stderr
 On fail:  route to Phase 7.8 branch matching failed gate(s); re-run 7.7 after remedy
 Advance:  Phase 8
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'REMOTE'
 set -uo pipefail
 FAILS=""
 
@@ -1413,7 +1463,7 @@ file:
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'REMOTE'
 set -euo pipefail
 if [ -f "$HOME/sysroot.sh" ]; then
   mv -f "$HOME/sysroot.sh" "$HOME/.vscode-server/sysroot.sh"
@@ -1444,7 +1494,7 @@ expands locally; `\$` on remote-only vars keeps them deferred to Amarel):
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<REMOTE
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<REMOTE
 set -euo pipefail
 cd /tmp
 curl -fsSL https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.18.0-x86_64.tar.gz -o patchelf-0.18.tgz
@@ -1473,6 +1523,8 @@ remediation pass → escalate to the user (do not loop).
 
 ## Phase 8 — Wire `~/.bashrc` and verify env var
 
+> **⚙️ Legacy CentOS 7 only — auto-skipped on RHEL 9.6** (Phase 5.5 `PLATFORM=NATIVE`).
+
 **Goal:** Append the sysroot loader to `~/.bashrc` on Amarel (idempotent),
 then verify the env var survives a non-interactive shell. **All steps run
 yourself via `ssh -o BatchMode=yes`.**
@@ -1485,7 +1537,7 @@ yourself via `ssh -o BatchMode=yes`.**
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'REMOTE'
 set -euo pipefail
 if ! grep -q 'vscode-server/sysroot\.sh' "$HOME/.bashrc" 2>/dev/null; then
   cat >> "$HOME/.bashrc" <<'BRC'
@@ -1506,7 +1558,7 @@ Fail:     empty line
 On fail:  inspect ~/.bashrc (Phase 8.3); move source line above any early return
 Advance:  Phase 9
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'echo "$VSCODE_SERVER_PATCHELF_PATH"'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'echo "$VSCODE_SERVER_PATCHELF_PATH"'
 ```
 
 **Success:** prints `/home/<NetID>/.vscode-server/sysroot/usr/bin/patchelf`.
@@ -1524,7 +1576,7 @@ Inspect first:
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'head -30 ~/.bashrc'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'head -30 ~/.bashrc'
 ```
 
 If the heredoc append didn't land cleanly (as happened in the canonical manual
@@ -1534,7 +1586,7 @@ run), give the user this manual fallback:
 
 [TTY]
 ```bash
-ssh <NetID>@amarel.rutgers.edu
+ssh <NetID>@amarel-new.hpc.rutgers.edu
 ```
 
 > Once you have the Amarel shell prompt, open `~/.bashrc` in an editor — copy this:
@@ -1561,6 +1613,12 @@ Then re-run 8.2 to confirm.
 
 ## Phase 9 — Disable VS Code extension signature verification on Amarel
 
+> **⚙️ Legacy CentOS 7 only — auto-skipped on RHEL 9.6.** The crash this works
+> around only happens when the node binary is patchelf'd against the custom
+> glibc; on RHEL 9 the server is unpatched, so signed extensions install
+> normally. (If a RHEL 9 user ever hits `signature verification failed`, apply
+> this same merge by hand.)
+
 **Goal (default-on, probe-to-skip):** VS Code Server's VSIX signature check
 crashes on CentOS 7 with the custom glibc node. The fix is to merge
 `"extensions.verifySignature": false` into the remote machine settings.
@@ -1582,7 +1640,7 @@ Phase 9.
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'REMOTE'
 set -uo pipefail
 F="$HOME/.vscode-server/data/Machine/settings.json"
 
@@ -1663,7 +1721,7 @@ idempotent.
 
 [MANDATORY][EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'REMOTE'
 set -euo pipefail
 mkdir -p "$HOME/.vscode-server/data/Machine"
 if ! command -v python3 >/dev/null 2>&1; then
@@ -1692,7 +1750,7 @@ REMOTE
 
 [MANDATORY][EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'REMOTE'
 set -euo pipefail
 DIR="$HOME/.vscode-server/data/Machine"
 F="$DIR/settings.json"
@@ -1720,7 +1778,7 @@ Fail:     "FAIL_VERIFY" or "TOOL_MISSING"
 On fail:  inspect settings.json (cat command in 9.2); fix JSON syntax or re-run 9.1
 Advance:  Phase 10
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'REMOTE'
 set -uo pipefail
 F="$HOME/.vscode-server/data/Machine/settings.json"
 if ! command -v python3 >/dev/null 2>&1; then
@@ -1749,7 +1807,7 @@ agent-autonomous):
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'cat ~/.vscode-server/data/Machine/settings.json'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'cat ~/.vscode-server/data/Machine/settings.json'
 ```
 
 Show the user the contents, have them fix the JSON syntax in a text editor,
@@ -1771,17 +1829,17 @@ already open (otherwise no action needed).
 > 1. Open VS Code.
 > 2. `Cmd+Shift+P` (Mac) / `Ctrl+Shift+P` (Win/Linux).
 > 3. Type and run: **Remote-SSH: Connect to Host**.
-> 4. From the list, pick the host **`amarel.rutgers.edu`**. The list shows host
->    *aliases* from your SSH config, so this is just `amarel.rutgers.edu` — your
+> 4. From the list, pick the host **`amarel-new.hpc.rutgers.edu`**. The list shows host
+>    *aliases* from your SSH config, so this is just `amarel-new.hpc.rutgers.edu` — your
 >    NetID is already baked into the config; you do **not** type `NetID@host`.
 > 5. First time only: click **Allow** on the "OS unsupported" warning.
 > 6. Open View → Output, dropdown → Remote-SSH. Watch for `Server started`.
-> 7. Bottom-left status bar shows **SSH: amarel.rutgers.edu** (green).
+> 7. Bottom-left status bar shows **SSH: amarel-new.hpc.rutgers.edu** (green).
 >
 > ⚠️ **Pick the right entry.** The dropdown may also list a separate
 > **`rutgers.edu`** entry (a different host that this skill did **not** create).
 > **Do not click `rutgers.edu`** — it will not connect to Amarel. Always choose
-> **`amarel.rutgers.edu`**. (That stray `rutgers.edu` entry is harmless for now;
+> **`amarel-new.hpc.rutgers.edu`**. (That stray `rutgers.edu` entry is harmless for now;
 > cleaning it out of your SSH config is a separate fix we'll do later.)
 
 **Common failures (linked recovery branches; none run on a clean first install):**
@@ -1801,6 +1859,11 @@ optional **Phase 12** for GitHub). If not, you're finished here.
 ---
 
 ## Phase 11 — Source Control: point VS Code at a modern git
+
+> **On RHEL 9.6 (amarel-new):** the system git is already modern (~2.43), so VS
+> Code's probe passes and this phase writes nothing — the 11.0.1 skip-probe
+> reports `SYSTEM_GIT_OK` and you continue to Phase 12. The Lmod `git-modern.sh`
+> wrapper below is a **legacy CentOS 7** mechanism (stock git 1.8.3.1).
 
 **Goal:** Make VS Code's Source Control panel detect your cloned repos. VS Code
 Server resolves bare `git` from its **non-interactive PATH**, which on Amarel
@@ -1823,7 +1886,7 @@ from Phase 9.
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'command -v git; git --version'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'command -v git; git --version'
 ```
 
 **Success marker:** if this prints `git version 1.8.x` (or anything below 2.5),
@@ -1841,7 +1904,7 @@ server-like env + throwaway repo) against (1) the `git.path` already in
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'REMOTE'
 set -uo pipefail
 SETTINGS_FILE="$HOME/.vscode-server/data/Machine/settings.json"
 ge25() { awk -v v="${1:-0.0}" 'BEGIN{split(v,a,"."); exit !(((a[1]+0)>2)||((a[1]+0)==2&&(a[2]+0)>=5))}'; }
@@ -1909,7 +1972,7 @@ all, it stops with `NO_MODERN_GIT`.
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'REMOTE'
 set -uo pipefail
 VSROOT="$HOME/.vscode-server"
 SETTINGS_DIR="$VSROOT/data/Machine"
@@ -2054,7 +2117,7 @@ actually work?" test; you don't have to eyeball the GUI to know.
 
 [VERIFY]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'REMOTE'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'REMOTE'
 set -uo pipefail
 SETTINGS_FILE="$HOME/.vscode-server/data/Machine/settings.json"
 ge25() { awk -v v="${1:-0.0}" 'BEGIN{split(v,a,"."); exit !(((a[1]+0)>2)||((a[1]+0)==2&&(a[2]+0)>=5))}'; }
@@ -2115,14 +2178,14 @@ Find the module name yourself:
 
 [TTY]
 ```bash
-ssh <NetID>@amarel.rutgers.edu 'bash -lc "module use /projects/community/modulefiles; module avail git"'
+ssh <NetID>@amarel-new.hpc.rutgers.edu 'bash -lc "module use /projects/community/modulefiles; module avail git"'
 ```
 
 (`bash -lc` so Lmod is initialised, and `module use …` so Amarel's community
 git modules are visible — a bare `module spider git` finds nothing without it.)
 Paste the output back and I'll re-run 11.1 loading the exact module
 (`module load git/<version>`). Or set it in the GUI: VS Code **Settings** →
-switch to the **Remote [SSH: amarel.rutgers.edu]** tab → search `git.path` → set
+switch to the **Remote [SSH: amarel-new.hpc.rutgers.edu]** tab → search `git.path` → set
 it to the modern git's absolute path (or to a wrapper that runs `module load
 git`) → **Developer: Reload Window**.
 
@@ -2147,7 +2210,7 @@ so we run the sign-in step **only if you are not already logged in**.
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'command -v gh >/dev/null 2>&1 || { for i in /etc/profile.d/modules.sh /etc/profile.d/lmod.sh /usr/share/lmod/lmod/init/bash; do [ -f "$i" ] && . "$i" 2>/dev/null && break; done; command -v module >/dev/null 2>&1 && { module use /projects/community/modulefiles 2>/dev/null; module load gh 2>/dev/null; }; }; if command -v gh >/dev/null 2>&1; then gh --version | head -1; gh auth status >/dev/null 2>&1 && echo AUTHED || echo NEEDS_LOGIN; else echo NO_GH; fi'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'command -v gh >/dev/null 2>&1 || { for i in /etc/profile.d/modules.sh /etc/profile.d/lmod.sh /usr/share/lmod/lmod/init/bash; do [ -f "$i" ] && . "$i" 2>/dev/null && break; done; command -v module >/dev/null 2>&1 && { module use /projects/community/modulefiles 2>/dev/null; module load gh 2>/dev/null; }; }; if command -v gh >/dev/null 2>&1; then gh --version | head -1; gh auth status >/dev/null 2>&1 && echo AUTHED || echo NEEDS_LOGIN; else echo NO_GH; fi'
 ```
 
 - `gh version …` + **`AUTHED`** → already signed in to GitHub. **Skip 12.1.** Go
@@ -2184,7 +2247,7 @@ login state, never the token):**
 
 [VERIFY]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'command -v gh >/dev/null 2>&1 || { for i in /etc/profile.d/modules.sh /etc/profile.d/lmod.sh /usr/share/lmod/lmod/init/bash; do [ -f "$i" ] && . "$i" 2>/dev/null && break; done; command -v module >/dev/null 2>&1 && { module use /projects/community/modulefiles 2>/dev/null; module load gh 2>/dev/null; }; }; gh auth status >/dev/null 2>&1 && echo AUTHED || echo NEEDS_LOGIN'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'command -v gh >/dev/null 2>&1 || { for i in /etc/profile.d/modules.sh /etc/profile.d/lmod.sh /usr/share/lmod/lmod/init/bash; do [ -f "$i" ] && . "$i" 2>/dev/null && break; done; command -v module >/dev/null 2>&1 && { module use /projects/community/modulefiles 2>/dev/null; module load gh 2>/dev/null; }; }; gh auth status >/dev/null 2>&1 && echo AUTHED || echo NEEDS_LOGIN'
 ```
 
 - `AUTHED` → login worked; advance to 12.2.
@@ -2198,7 +2261,7 @@ ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'command -v gh >/dev/null 2>&1 |
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'git config --global --get-regexp "^credential\." 2>/dev/null | grep -qi "gh auth git-credential" && echo "ALREADY_WIRED — skip 12.2" || echo "NEEDS_SETUP_GIT"'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'git config --global --get-regexp "^credential\." 2>/dev/null | grep -qi "gh auth git-credential" && echo "ALREADY_WIRED — skip 12.2" || echo "NEEDS_SETUP_GIT"'
 ```
 
 `ALREADY_WIRED` → the credential helper is already in place; skip to 12.3.
@@ -2216,7 +2279,7 @@ gh auth setup-git
 
 [VERIFY]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'git config --global --get-regexp "^credential\." 2>/dev/null | grep -qi "gh auth git-credential" && echo "✓ gh wired as git credential helper" || echo "✗ helper not set — re-run 12.2 (it must run after a successful 12.1)"'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'git config --global --get-regexp "^credential\." 2>/dev/null | grep -qi "gh auth git-credential" && echo "✓ gh wired as git credential helper" || echo "✗ helper not set — re-run 12.2 (it must run after a successful 12.1)"'
 ```
 
 ### 12.3 — Set your git identity
@@ -2225,7 +2288,7 @@ ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'git config --global --get-regex
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'n=$(git config --global user.name); e=$(git config --global user.email); if [ -n "$n" ] && [ -n "$e" ]; then case "$e" in *@users.noreply.github.com) echo "ALREADY_SET: $n <$e> — skip 12.3";; *) echo "SET_BUT_CHECK: $n <$e> — set, but NOT a no-reply address";; esac; else echo "NEEDS_IDENTITY"; fi'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'n=$(git config --global user.name); e=$(git config --global user.email); if [ -n "$n" ] && [ -n "$e" ]; then case "$e" in *@users.noreply.github.com) echo "ALREADY_SET: $n <$e> — skip 12.3";; *) echo "SET_BUT_CHECK: $n <$e> — set, but NOT a no-reply address";; esac; else echo "NEEDS_IDENTITY"; fi'
 ```
 
 - `ALREADY_SET …` → name + email are set and the email is a no-reply address; skip to 12.4 (or finish).
@@ -2265,7 +2328,7 @@ secret — so reading it back is fine; unlike tokens, which the skill never read
 
 [VERIFY]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel.rutgers.edu 'n=$(git config --global user.name); e=$(git config --global user.email); if [ -n "$n" ] && [ -n "$e" ]; then echo "✓ identity: $n <$e>"; case "$e" in *@users.noreply.github.com) echo "  (no-reply — safe whether or not email privacy is on)";; *) echo "  ⚠ not a no-reply address — if GitHub email privacy is ON, pushes will hit GH007 (see 12.4); switch to your no-reply address if so";; esac; else echo "✗ identity incomplete — re-run 12.3"; fi'
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'n=$(git config --global user.name); e=$(git config --global user.email); if [ -n "$n" ] && [ -n "$e" ]; then echo "✓ identity: $n <$e>"; case "$e" in *@users.noreply.github.com) echo "  (no-reply — safe whether or not email privacy is on)";; *) echo "  ⚠ not a no-reply address — if GitHub email privacy is ON, pushes will hit GH007 (see 12.4); switch to your no-reply address if so";; esac; else echo "✗ identity incomplete — re-run 12.3"; fi'
 ```
 
 ### 12.4 — If a push is rejected with `GH007` (private email)
@@ -2329,7 +2392,7 @@ personal `Host rutgers.edu`) or any other key, and never reads private-key
 contents. Two modes (the script takes one argument):
 
 - **`config`** (default — `bash reset.sh`): cleans config-level state only —
-  the `~/.zshrc` block, the skill's `Host amarel.rutgers.edu` `ssh_config`
+  the `~/.zshrc` block, the skill's `Host amarel-new.hpc.rutgers.edu` `ssh_config`
   block, the `known_hosts` entries, and dedupes Amarel's `authorized_keys`.
   Leaves your key pair and the deployed sysroot in place.
 - **`full`** (`bash reset.sh full`): a complete wipe of everything the skill
@@ -2369,7 +2432,7 @@ MODE="${1:-config}"   # "config" (default) or "full" (also deletes the key pair)
 # it, several agent keys can exhaust Amarel's MaxAuthTries -> false denial -> cleanup skipped
 # -> a manually-applied git.path/git-modern.sh survives and contaminates the next test).
 if [ "$MODE" = "full" ]; then
-  if ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu 'bash -se' <<'AMAREL' 2>/dev/null
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'AMAREL' 2>/dev/null
 set -u
 sed -i.bak "/amarel-vscode/d" ~/.ssh/authorized_keys 2>/dev/null
 rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz
@@ -2407,7 +2470,7 @@ AMAREL
   fi
 else
   # CONFIG: dedupe authorized_keys on Amarel (same identity-pinning rationale as above)
-  if ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys' 2>/dev/null; then
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu 'sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys' 2>/dev/null; then
     echo "✓ Amarel authorized_keys deduped"
   else
     echo "• Skipped Amarel dedupe (key auth not set up yet — that's fine)"
@@ -2417,11 +2480,11 @@ fi
 # 2) Remove the Amarel ssh-add block from ~/.zshrc (marker + the line after it)
 [ -f ~/.zshrc ] && sed -i.bak '/# Amarel HPC — re-load SSH key from Keychain/,+1d' ~/.zshrc && echo "✓ ~/.zshrc cleaned"
 
-# 3) Remove ONLY the skill-authored Host amarel.rutgers.edu block from ~/.ssh/config
+# 3) Remove ONLY the skill-authored Host amarel-new.hpc.rutgers.edu block from ~/.ssh/config
 if [ -f ~/.ssh/config ]; then
   cp ~/.ssh/config ~/.ssh/config.bak
   awk '
-    /^Host[ \t]+amarel\.rutgers\.edu[ \t]*$/ { skip=1; next }
+    /^Host[ \t]+amarel(-new\.hpc)?\.rutgers\.edu[ \t]*$/ { skip=1; next }
     skip==1 {
       if ($0 ~ /^Host[ \t]/) { skip=0 }
       else if ($0 ~ /^[ \t]/ || $0 ~ /^[ \t]*$/) { next }
@@ -2431,8 +2494,8 @@ if [ -f ~/.ssh/config ]; then
   ' ~/.ssh/config.bak > ~/.ssh/config && chmod 600 ~/.ssh/config && echo "✓ ~/.ssh/config: amarel block removed (others kept)"
 fi
 
-# 4) Remove all amarel.rutgers.edu lines (any algorithm) from known_hosts
-[ -f ~/.ssh/known_hosts ] && sed -i.bak '/^amarel\.rutgers\.edu /d' ~/.ssh/known_hosts && echo "✓ known_hosts: amarel entries removed"
+# 4) Remove all amarel-new.hpc.rutgers.edu lines (any algorithm) from known_hosts
+[ -f ~/.ssh/known_hosts ] && sed -E -i.bak '/^amarel(-new\.hpc)?\.rutgers\.edu /d' ~/.ssh/known_hosts && echo "✓ known_hosts: amarel entries removed"
 
 # 5) Wiping agent keys and local key pair if FULL
 if [ "$MODE" = "full" ]; then
@@ -2483,21 +2546,21 @@ Set-StrictMode -Version Latest
 
 # 1) FULL or CONFIG: Amarel-side cleanup/dedupe first, while SSH config and keys are fully intact!
 if ($Mode -eq 'full') {
-  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu "sed -i.bak '/amarel-vscode/d' ~/.ssh/authorized_keys 2>/dev/null; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz; rm -f ~/.vscode-server/git-modern.sh; [ -f ~/.bashrc ] && sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc; if command -v python3 >/dev/null 2>&1; then python3 -c 'import json,os;p=os.path.expanduser(`"~/.vscode-server/data/Machine/settings.json`");d=(json.load(open(p)) if os.path.exists(p) and os.path.getsize(p)>0 else {});d=(d if isinstance(d,dict) else {});[d.pop(k,None) for k in (`"git.path`",`"extensions.verifySignature`")];open(p,`"w`").write(json.dumps(d,indent=4)+chr(10))' 2>/dev/null; elif command -v jq >/dev/null 2>&1; then jq 'del(.`"git.path`", .`"extensions.verifySignature`")' ~/.vscode-server/data/Machine/settings.json > ~/.vscode-server/data/Machine/settings.json.tmp 2>/dev/null && mv -f ~/.vscode-server/data/Machine/settings.json.tmp ~/.vscode-server/data/Machine/settings.json; fi; true" 2>$null
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu "sed -i.bak '/amarel-vscode/d' ~/.ssh/authorized_keys 2>/dev/null; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz; rm -f ~/.vscode-server/git-modern.sh; [ -f ~/.bashrc ] && sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc; if command -v python3 >/dev/null 2>&1; then python3 -c 'import json,os;p=os.path.expanduser(`"~/.vscode-server/data/Machine/settings.json`");d=(json.load(open(p)) if os.path.exists(p) and os.path.getsize(p)>0 else {});d=(d if isinstance(d,dict) else {});[d.pop(k,None) for k in (`"git.path`",`"extensions.verifySignature`")];open(p,`"w`").write(json.dumps(d,indent=4)+chr(10))' 2>/dev/null; elif command -v jq >/dev/null 2>&1; then jq 'del(.`"git.path`", .`"extensions.verifySignature`")' ~/.vscode-server/data/Machine/settings.json > ~/.vscode-server/data/Machine/settings.json.tmp 2>/dev/null && mv -f ~/.vscode-server/data/Machine/settings.json.tmp ~/.vscode-server/data/Machine/settings.json; fi; true" 2>$null
   if ($LASTEXITCODE -eq 0) { "✓ Amarel: skill key, sysroot, ~/.bashrc loader, git-modern.sh, and git.path/verifySignature settings removed" } else { "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)" }
 } else {
-  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes <NetID>@amarel.rutgers.edu "sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys" 2>$null
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu "sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys" 2>$null
   if ($LASTEXITCODE -eq 0) { "✓ Amarel authorized_keys deduped" } else { "• Skipped Amarel dedupe (key auth not set up yet — that's fine)" }
 }
 
-# 2) Remove ONLY the skill-authored Host amarel.rutgers.edu block from $HOME\.ssh\config
+# 2) Remove ONLY the skill-authored Host amarel-new.hpc.rutgers.edu block from $HOME\.ssh\config
 $config = "$HOME\.ssh\config"
 if (Test-Path $config) {
   Copy-Item $config "$config.bak" -Force
   $out = [System.Collections.Generic.List[string]]::new()
   $skip = $false
   foreach ($line in Get-Content $config) {
-    if ($line -match '^Host[ \t]+amarel\.rutgers\.edu[ \t]*$') { $skip = $true; continue }
+    if ($line -match '^Host[ \t]+amarel(-new\.hpc)?\.rutgers\.edu[ \t]*$') { $skip = $true; continue }
     if ($skip) {
       if ($line -match '^Host[ \t]') { $skip = $false }
       elseif ($line -match '^[ \t]' -or $line -match '^[ \t]*$') { continue }
@@ -2509,11 +2572,11 @@ if (Test-Path $config) {
   "✓ ${config}: amarel block removed (others kept)"
 }
 
-# 3) Remove all amarel.rutgers.edu lines (any algorithm) from known_hosts
+# 3) Remove all amarel-new.hpc.rutgers.edu lines (any algorithm) from known_hosts
 $knownHosts = "$HOME\.ssh\known_hosts"
 if (Test-Path $knownHosts) {
   Copy-Item $knownHosts "$knownHosts.bak" -Force
-  $filtered = Get-Content $knownHosts | Where-Object { $_ -notmatch '^amarel\.rutgers\.edu ' }
+  $filtered = Get-Content $knownHosts | Where-Object { $_ -notmatch '^amarel(-new\.hpc)?\.rutgers\.edu ' }
   Set-Content -Path $knownHosts -Value $filtered -Encoding UTF8
   "✓ known_hosts: amarel entries removed"
 }

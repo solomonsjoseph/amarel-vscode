@@ -4,9 +4,12 @@ Set up VS Code Remote-SSH on Rutgers Amarel and fix the GLIBC 2.28 error on
 macOS or Windows.
 
 This community-maintained project helps Rutgers Amarel users connect with VS
-Code Remote-SSH when VS Code Server fails on Amarel's CentOS 7 environment with
-`expected GLIBC >= v2.28.0`. It works with Claude Code, Codex, other LLM tools,
-or a plain shell/PowerShell script.
+Code Remote-SSH. Amarel is migrating from CentOS 7 (glibc 2.17) to RHEL 9.6
+(glibc 2.34) on the new host `amarel-new.hpc.rutgers.edu`. On the legacy CentOS 7
+host VS Code Server fails with `expected GLIBC >= v2.28.0`, which this project
+fixes with a custom-glibc sysroot; on RHEL 9.6 it runs natively, and the skill
+auto-detects the host. It works with Claude Code, Codex, other LLM tools, or a
+plain shell/PowerShell script.
 
 This is not an official Rutgers or OARC project.
 

@@ -52,6 +52,12 @@ skill never set `git.path`, so the stale system git always won.
 
 ## The fix
 
+> **RHEL 9.6 (amarel-new) needs none of this.** The new host ships a modern
+> system **git ~2.43**, which passes VS Code's `--git-common-dir` probe out of
+> the box — no `git.path` override, no Lmod, no wrapper. The skill's Phase 11
+> skip-probe reports `SYSTEM_GIT_OK` and writes nothing. Everything below applies
+> to the **legacy CentOS 7 host** (stock git 1.8.3.1).
+
 Set the machine-scoped **`git.path`** to a modern git on the remote. It lives in
 the **remote** Machine settings — the same file Phase 9 already edits:
 
