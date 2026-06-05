@@ -189,6 +189,7 @@ Phase 0 of the skill detects your OS and confirms all of these automatically.
 | 4 | `ssh-add` — save your key passphrase to the OS keychain |
 | 5 | Verify passwordless SSH works end-to-end |
 | 5.5 | Detect the remote platform (glibc): RHEL 9.6 → skip the sysroot Phases 6–9; CentOS 7 → run them |
+| 5.5b | *(RHEL 9.6 only)* Strip any legacy sysroot residue left from a prior CentOS 7 setup on the same `$HOME` |
 | 6 | *(legacy CentOS 7 only)* Download the glibc 2.28 sysroot tarball from GitHub Releases, verify SHA-256 |
 | 7 | *(legacy CentOS 7 only)* Copy the tarball to Amarel, extract it, wire up `~/.bashrc` |
 | 8 | *(legacy CentOS 7 only)* Verify the glibc env vars load in a non-interactive SSH session |
