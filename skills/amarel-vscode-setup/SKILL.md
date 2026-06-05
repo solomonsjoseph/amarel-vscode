@@ -1034,6 +1034,40 @@ Read the glibc version from the first line (e.g. `ldd (GNU libc) 2.34`):
 > resolve either way; the glibc version is what VS Code Server actually gates on,
 > so it is the reliable signal. Record `PLATFORM` and reuse it in Phases 6–11.
 
+### 5.5b — NATIVE only: strip any legacy sysroot residue (run this yourself)
+
+> **Do this on `PLATFORM=NATIVE` before connecting; skip it on LEGACY.** If this
+> `$HOME` was *ever* set up against the legacy CentOS 7 host, `~/.bashrc` still
+> sources the custom-glibc loader (`~/.vscode-server/sysroot.sh`, which exports
+> `VSCODE_SERVER_CUSTOM_GLIBC_*`). VS Code **honors those env vars on RHEL 9** and
+> pops a *"You are about to connect to an OS version that is unsupported by Visual
+> Studio Code"* dialog — and forces the sysroot code path — even though native
+> glibc 2.34 needs none of it. Remove the loader, the sysroot, and any server that
+> was patchelf'd against it (it would fail to start natively). `data/` is kept.
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'REMOTE'
+set -u
+cleaned=0
+if [ -f "$HOME/.bashrc" ] && grep -q 'vscode-server/sysroot\.sh' "$HOME/.bashrc" 2>/dev/null; then
+  sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' "$HOME/.bashrc"; cleaned=1
+fi
+if [ -e "$HOME/.vscode-server/sysroot" ] || [ -e "$HOME/.vscode-server/sysroot.sh" ] || [ -e "$HOME/sysroot.sh" ]; then
+  rm -rf "$HOME/.vscode-server/sysroot" "$HOME/.vscode-server/sysroot.sh" "$HOME/sysroot.sh"; cleaned=1
+fi
+if [ "$cleaned" = 1 ]; then
+  rm -rf "$HOME/.vscode-server/bin" "$HOME/.vscode-server/cli" 2>/dev/null
+  echo "✓ Removed legacy sysroot residue — VS Code will reinstall natively"
+else
+  echo "✓ No legacy sysroot residue — clean native host"
+fi
+REMOTE
+```
+
+**Success marker:** either `✓ Removed legacy sysroot residue …` or `✓ No legacy
+sysroot residue …`. Then continue to **Phase 10** (Connect).
+
 ---
 
 ## Phase 6 — Locate the sysroot tarball
@@ -2394,10 +2428,12 @@ contents. Two modes (the script takes one argument):
   and, in one SSH call (while key auth still works), removes the skill's key from
   Amarel's `authorized_keys`, deletes the deployed `~/.vscode-server/sysroot` +
   `sysroot.sh` (and any leftover upload), strips the `~/.bashrc` loader block,
-  **removes the Phase 11 `~/.vscode-server/git-modern.sh` wrapper, and strips the
-  skill-written `git.path` and `extensions.verifySignature` keys from the remote
-  Machine `settings.json`** (so it returns to its pre-skill state — any keys you
-  added yourself are preserved) — forcing **every** phase (1–11) to re-run from
+  **removes the installed server binaries (`~/.vscode-server/bin` + `cli`) so a
+  server patchelf'd against the now-deleted sysroot can't linger and break the
+  next (native) connect, removes the Phase 11 `~/.vscode-server/git-modern.sh`
+  wrapper, and strips the skill-written `git.path` and `extensions.verifySignature`
+  keys from the remote Machine `settings.json`** (so it returns to its pre-skill
+  state — `data/` and any keys you added yourself are preserved) — forcing **every** phase (1–11) to re-run from
   scratch (you'll set a new passphrase, enter your Amarel password once more,
   re-deploy the sysroot, and re-apply the Source Control fix). This is the mode
   the Phase 0.1 "fresh start" offer uses. The Amarel-side wipe pins the Amarel key
@@ -2429,7 +2465,7 @@ if [ "$MODE" = "full" ]; then
   if ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'AMAREL' 2>/dev/null
 set -u
 sed -i.bak "/amarel-vscode/d" ~/.ssh/authorized_keys 2>/dev/null
-rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz
+rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz ~/.vscode-server/bin ~/.vscode-server/cli
 rm -f ~/.vscode-server/git-modern.sh
 [ -f ~/.bashrc ] && sed -i.bak -e "/# VS Code Server custom glibc workaround/d" -e "\#vscode-server/sysroot\.sh#d" ~/.bashrc
 # Return the remote Machine settings.json to its pre-skill state: drop ONLY the
@@ -2540,7 +2576,7 @@ Set-StrictMode -Version Latest
 
 # 1) FULL or CONFIG: Amarel-side cleanup/dedupe first, while SSH config and keys are fully intact!
 if ($Mode -eq 'full') {
-  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu "sed -i.bak '/amarel-vscode/d' ~/.ssh/authorized_keys 2>/dev/null; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz; rm -f ~/.vscode-server/git-modern.sh; [ -f ~/.bashrc ] && sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc; if command -v python3 >/dev/null 2>&1; then python3 -c 'import json,os;p=os.path.expanduser(`"~/.vscode-server/data/Machine/settings.json`");d=(json.load(open(p)) if os.path.exists(p) and os.path.getsize(p)>0 else {});d=(d if isinstance(d,dict) else {});[d.pop(k,None) for k in (`"git.path`",`"extensions.verifySignature`")];open(p,`"w`").write(json.dumps(d,indent=4)+chr(10))' 2>/dev/null; elif command -v jq >/dev/null 2>&1; then jq 'del(.`"git.path`", .`"extensions.verifySignature`")' ~/.vscode-server/data/Machine/settings.json > ~/.vscode-server/data/Machine/settings.json.tmp 2>/dev/null && mv -f ~/.vscode-server/data/Machine/settings.json.tmp ~/.vscode-server/data/Machine/settings.json; fi; true" 2>$null
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu "sed -i.bak '/amarel-vscode/d' ~/.ssh/authorized_keys 2>/dev/null; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz ~/.vscode-server/bin ~/.vscode-server/cli; rm -f ~/.vscode-server/git-modern.sh; [ -f ~/.bashrc ] && sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc; if command -v python3 >/dev/null 2>&1; then python3 -c 'import json,os;p=os.path.expanduser(`"~/.vscode-server/data/Machine/settings.json`");d=(json.load(open(p)) if os.path.exists(p) and os.path.getsize(p)>0 else {});d=(d if isinstance(d,dict) else {});[d.pop(k,None) for k in (`"git.path`",`"extensions.verifySignature`")];open(p,`"w`").write(json.dumps(d,indent=4)+chr(10))' 2>/dev/null; elif command -v jq >/dev/null 2>&1; then jq 'del(.`"git.path`", .`"extensions.verifySignature`")' ~/.vscode-server/data/Machine/settings.json > ~/.vscode-server/data/Machine/settings.json.tmp 2>/dev/null && mv -f ~/.vscode-server/data/Machine/settings.json.tmp ~/.vscode-server/data/Machine/settings.json; fi; true" 2>$null
   if ($LASTEXITCODE -eq 0) { "✓ Amarel: skill key, sysroot, ~/.bashrc loader, git-modern.sh, and git.path/verifySignature settings removed" } else { "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)" }
 } else {
   & ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu "sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys" 2>$null

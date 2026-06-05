@@ -332,6 +332,40 @@ function Invoke-PhaseDetectPlatform {
   }
 }
 
+# ─── Phase 5.6 — Native host: strip any legacy sysroot residue (NATIVE only) ──
+# A prior LEGACY run on a shared $HOME leaves the custom-glibc loader in ~/.bashrc
+# (sources ~/.vscode-server/sysroot.sh, which exports VSCODE_SERVER_CUSTOM_GLIBC_*).
+# VS Code honors those env vars on RHEL 9 and shows the "unsupported OS" dialog +
+# forces the sysroot code path even though native glibc 2.34 needs none of it.
+function Invoke-PhaseNativeCleanup {
+  Write-Heading "Phase 5.6 — Native host: remove any legacy sysroot residue"
+  $remoteScript = @'
+set -u
+cleaned=0
+if [ -f "$HOME/.bashrc" ] && grep -q 'vscode-server/sysroot\.sh' "$HOME/.bashrc" 2>/dev/null; then
+  sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' "$HOME/.bashrc"
+  cleaned=1
+fi
+if [ -e "$HOME/.vscode-server/sysroot" ] || [ -e "$HOME/.vscode-server/sysroot.sh" ] || [ -e "$HOME/sysroot.sh" ]; then
+  rm -rf "$HOME/.vscode-server/sysroot" "$HOME/.vscode-server/sysroot.sh" "$HOME/sysroot.sh"
+  cleaned=1
+fi
+if [ "$cleaned" = 1 ]; then
+  rm -rf "$HOME/.vscode-server/bin" "$HOME/.vscode-server/cli" 2>/dev/null
+  echo "Removed legacy sysroot residue (~/.bashrc loader, sysroot, patched server) -- VS Code reinstalls natively"
+else
+  echo "No legacy sysroot residue -- clean native host"
+fi
+'@
+  $global:LASTEXITCODE = 0
+  try { $remoteScript | & ssh -o BatchMode=yes "$AmarelUser@$AmarelHost" 'bash -se' } catch { }
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warn "Native cleanup probe failed (non-fatal). If VS Code shows an 'unsupported OS' dialog, run a full reset on Amarel."
+  } else {
+    Write-Info "Native host prepared (no sysroot, no 'unsupported OS' dialog)"
+  }
+}
+
 # ─── Phase 6 — Download + verify tarball ───────────────────────────────────
 function Invoke-PhaseDownloadTarball {
   Write-Heading "Phase 6 — Download sysroot tarball"
@@ -829,6 +863,8 @@ if ($script:Platform -eq 'LEGACY') {
   Invoke-PhaseDeploy
   Invoke-PhaseVerifyEnv
   Invoke-PhaseDisableSignatureCheck
+} else {
+  Invoke-PhaseNativeCleanup
 }
 
 Invoke-PhaseConfigureGit

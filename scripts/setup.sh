@@ -381,6 +381,44 @@ phase_detect_platform() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Phase 5.6 — Native host: strip any legacy sysroot residue (NATIVE only)
+# A prior LEGACY run on a shared $HOME leaves the custom-glibc loader in ~/.bashrc
+# (it sources ~/.vscode-server/sysroot.sh, which exports VSCODE_SERVER_CUSTOM_GLIBC_*).
+# VS Code honors those env vars on RHEL 9 and shows the "unsupported OS" dialog +
+# forces the sysroot code path even though native glibc 2.34 needs none of it. So on
+# NATIVE we proactively remove the loader, the sysroot, and any server that was
+# patchelf'd against it (it would fail to start natively). data/ is preserved.
+# ─────────────────────────────────────────────────────────────────────────────
+
+phase_native_cleanup() {
+  heading "Phase 5.6 — Native host: remove any legacy sysroot residue"
+
+  if ! ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" 'bash -se' <<'REMOTE'
+set -u
+cleaned=0
+if [ -f "$HOME/.bashrc" ] && grep -q 'vscode-server/sysroot\.sh' "$HOME/.bashrc" 2>/dev/null; then
+  sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' "$HOME/.bashrc"
+  cleaned=1
+fi
+if [ -e "$HOME/.vscode-server/sysroot" ] || [ -e "$HOME/.vscode-server/sysroot.sh" ] || [ -e "$HOME/sysroot.sh" ]; then
+  rm -rf "$HOME/.vscode-server/sysroot" "$HOME/.vscode-server/sysroot.sh" "$HOME/sysroot.sh"
+  cleaned=1
+fi
+if [ "$cleaned" = 1 ]; then
+  # The server was patchelf'd against the now-removed sysroot; drop the binaries so
+  # VS Code reinstalls a clean native server. Machine/settings.json (data/) is kept.
+  rm -rf "$HOME/.vscode-server/bin" "$HOME/.vscode-server/cli" 2>/dev/null
+  echo "✓ Removed legacy sysroot residue (~/.bashrc loader, sysroot, patched server) — VS Code will reinstall natively"
+else
+  echo "✓ No legacy sysroot residue — clean native host"
+fi
+REMOTE
+  then
+    warn "Native cleanup probe failed (non-fatal). If VS Code shows an 'unsupported OS' dialog, run a full reset on Amarel."
+  fi
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Phase 6 — Download + verify sysroot tarball
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -931,6 +969,8 @@ EOM
     phase_deploy
     phase_verify_env
     phase_disable_signature_check
+  else
+    phase_native_cleanup
   fi
 
   phase_configure_git
