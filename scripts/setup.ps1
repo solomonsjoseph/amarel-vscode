@@ -384,23 +384,6 @@ fi
   }
 }
 
-# ─── Phase 5.7 — Native host: add amarel.rutgers.edu → amarel-new alias ─────
-# VS Code caches hostnames in Recents. A user who previously connected via the
-# legacy amarel.rutgers.edu will see that stale entry and land on the old CentOS 7
-# host (glibc 2.17 → GLIBC error) even after a clean NATIVE setup. Adding an alias
-# block makes any click on the old hostname transparently redirect to the new host.
-function Invoke-PhaseAddLegacyAlias {
-  Write-Heading "Phase 5.7 — Add amarel.rutgers.edu alias (prevents stale VS Code Recents landing on old host)"
-  $cfg = "$HOME\.ssh\config"
-  if ((Get-Content $cfg -ErrorAction SilentlyContinue) -match "^Host $([regex]::Escape($LegacyAmarelHost))$") {
-    Write-Info "~/.ssh/config already has alias entry for $LegacyAmarelHost — skipping"
-    return
-  }
-  $block = "`n# Alias added by amarel-vscode: redirects stale VS Code Recents to the new host`nHost $LegacyAmarelHost`n  HostName $AmarelHost`n  User $AmarelUser`n  IdentityFile $SshKeyPath`n  IdentitiesOnly yes"
-  Add-Content -Path $cfg -Value $block
-  Write-Info "~/.ssh/config alias added: $LegacyAmarelHost → $AmarelHost"
-}
-
 # ─── Phase 6 — Download + verify tarball ───────────────────────────────────
 # Optional speed-up: prefetch the sysroot tarball in a BACKGROUND job so the
 # (LEGACY-only) download overlaps the interactive auth phases instead of blocking
@@ -935,7 +918,6 @@ if ($script:Platform -eq 'LEGACY') {
   Invoke-PhaseDisableSignatureCheck
 } else {
   Invoke-PhaseNativeCleanup
-  Invoke-PhaseAddLegacyAlias
 }
 Stop-TarballPrefetch -Mode kill   # discard any unconsumed prefetch (e.g. legacy hostname that probed NATIVE)
 

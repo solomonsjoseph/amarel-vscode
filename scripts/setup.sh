@@ -439,34 +439,6 @@ REMOTE
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase 5.7 — Native host: add amarel.rutgers.edu → amarel-new alias (NATIVE only)
-# VS Code caches hostnames in Recents. A user who previously connected via the
-# legacy amarel.rutgers.edu will see that stale entry and land on the old CentOS 7
-# host (glibc 2.17 → GLIBC error) even after a clean NATIVE setup. Adding an alias
-# block makes any click on the old hostname transparently redirect to the new host.
-# ─────────────────────────────────────────────────────────────────────────────
-
-phase_add_legacy_alias() {
-  heading "Phase 5.7 — Add amarel.rutgers.edu alias (prevents stale VS Code Recents landing on old host)"
-
-  if grep -qE "^Host ${LEGACY_AMAREL_HOST}$" "$SSH_CONFIG_PATH" 2>/dev/null; then
-    info "~/.ssh/config already has alias entry for $LEGACY_AMAREL_HOST — skipping"
-    return 0
-  fi
-
-  cat >> "$SSH_CONFIG_PATH" <<EOF
-
-# Alias added by amarel-vscode: redirects stale VS Code Recents to the new host
-Host $LEGACY_AMAREL_HOST
-  HostName $AMAREL_HOST
-  User $AMAREL_USER
-  IdentityFile $SSH_KEY_PATH
-  IdentitiesOnly yes
-EOF
-  info "~/.ssh/config alias added: $LEGACY_AMAREL_HOST → $AMAREL_HOST"
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Phase 6 — Download + verify sysroot tarball
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1054,7 +1026,6 @@ EOM
     phase_disable_signature_check
   else
     phase_native_cleanup
-    phase_add_legacy_alias
   fi
   reap_prefetch kill   # discard any unconsumed prefetch (e.g. legacy hostname that probed NATIVE)
 

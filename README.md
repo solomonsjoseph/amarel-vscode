@@ -190,7 +190,7 @@ Phase 0 of the skill detects your OS and confirms all of these automatically.
 | 5 | Verify passwordless SSH works end-to-end |
 | 5.5 | Detect the remote platform (glibc): RHEL 9.6 → skip the sysroot Phases 6–9; CentOS 7 → run them |
 | 5.5b | *(RHEL 9.6 only)* Strip any legacy sysroot residue left from a prior CentOS 7 setup on the same `$HOME` |
-| 5.5c | *(RHEL 9.6 only)* Add an `amarel.rutgers.edu` → `amarel-new.hpc.rutgers.edu` alias to `~/.ssh/config` so stale VS Code Recents entries don't land on the old CentOS 7 host |
+| 5.5c | *(RHEL 9.6 only, runbook only)* Prompt user to delete any stale `amarel.rutgers.edu` entry from VS Code Recents via **Remote-SSH: Remove Recent Host** — an SSH alias cannot be used here because VS Code workspace URIs encode the connection hostname |
 | 6 | *(legacy CentOS 7 only)* Download the glibc 2.28 sysroot tarball from GitHub Releases, verify SHA-256 |
 | 7 | *(legacy CentOS 7 only)* Copy the tarball to Amarel, extract it, wire up `~/.bashrc` |
 | 8 | *(legacy CentOS 7 only)* Verify the glibc env vars load in a non-interactive SSH session |
