@@ -385,11 +385,45 @@ fi
 }
 
 # ─── Phase 6 — Download + verify tarball ───────────────────────────────────
+# Optional speed-up: prefetch the sysroot tarball in a BACKGROUND job so the
+# (LEGACY-only) download overlaps the interactive auth phases instead of blocking
+# Phase 6. Cache warm-up keyed on the target *hostname* as a hint (legacy host needs
+# the tarball) — it does NOT decide the install path; Phase 5.5 routes on remote
+# glibc. Wrong hint ⇒ the file just sits cached, unused. Phase 6 checksum still gates.
+$script:PrefetchJob = $null
+
+function Start-TarballPrefetch {
+  if (Test-Path $TarballLocal) { return }            # already cached
+  if ($AmarelHost -ne $LegacyAmarelHost) { return }  # native default: nothing to fetch
+  $dir = Split-Path -Parent $TarballLocal
+  if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+  $script:PrefetchJob = Start-Job -ScriptBlock {
+    param($url, $dest)
+    try {
+      Invoke-WebRequest -Uri $url -OutFile "$dest.partial" -UseBasicParsing
+      Move-Item -Force "$dest.partial" $dest
+    } catch { }
+  } -ArgumentList $TarballUrl, $TarballLocal
+  Write-Info "Prefetching the sysroot tarball in the background while you authenticate…"
+}
+
+function Stop-TarballPrefetch {
+  param([string]$Mode = 'wait')
+  if (-not $script:PrefetchJob) { return }
+  if ($Mode -eq 'kill') { Stop-Job $script:PrefetchJob -ErrorAction SilentlyContinue }
+  else { Wait-Job $script:PrefetchJob -ErrorAction SilentlyContinue | Out-Null }
+  Remove-Job $script:PrefetchJob -Force -ErrorAction SilentlyContinue
+  $script:PrefetchJob = $null
+  Remove-Item "$TarballLocal.partial" -Force -ErrorAction SilentlyContinue
+}
+
 function Invoke-PhaseDownloadTarball {
   Write-Heading "Phase 6 — Download sysroot tarball"
 
   $dir = Split-Path -Parent $TarballLocal
   if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+
+  Stop-TarballPrefetch -Mode wait   # finish any in-flight background prefetch before the cache check
 
   if (Test-Path $TarballLocal) {
     Write-Info "Tarball already present locally: $TarballLocal"
@@ -867,6 +901,7 @@ Write-Host @"
 "@
 
 Invoke-PhasePreflight
+Start-TarballPrefetch   # warm the tarball cache in the background during auth (LEGACY hint only)
 Invoke-PhaseKeygen
 Invoke-PhaseKnownHost
 Invoke-PhaseCopyId
@@ -884,6 +919,7 @@ if ($script:Platform -eq 'LEGACY') {
 } else {
   Invoke-PhaseNativeCleanup
 }
+Stop-TarballPrefetch -Mode kill   # discard any unconsumed prefetch (e.g. legacy hostname that probed NATIVE)
 
 Invoke-PhaseConfigureGit
 Invoke-PhaseFinish
