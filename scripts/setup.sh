@@ -185,24 +185,44 @@ phase_known_host() {
   ssh-keyscan -t ed25519 "$AMAREL_HOST" 2>/dev/null > "$tmp" \
     || die "Could not retrieve host key from $AMAREL_HOST. (Are you on the VPN?)"
 
+  # The scanned SHA256 fingerprint (field 2 of `ssh-keygen -lf`).
+  local scanned
+  scanned="$(ssh-keygen -lf "$tmp" 2>/dev/null | awk 'NR==1{print $2}')"
+
+  # Pinned reference for this host. Both transition hosts are pinned, so the happy
+  # path verifies automatically; only a non-standard AMAREL_HOST override has no pin.
+  local ref="" reftxt=""
+  if [[ "$AMAREL_HOST" == "$LEGACY_AMAREL_HOST" ]]; then
+    ref="SHA256:cN6l3kR3jbdOv6Ofz1b+KNCt3LaOCj9bq6yeHoR3eLs"; reftxt="legacy CentOS 7, recorded 2026-05-26"
+  elif [[ "$AMAREL_HOST" == "$DEFAULT_AMAREL_HOST" ]]; then
+    ref="SHA256:bKbfUNxVCu2nQvssMuNBFtzoR3J7BxXU5RSI9MjWi+E"; reftxt="RHEL 9.6, recorded 2026-06-05"
+  fi
+
   say  ""
-  say  "  Host key fingerprint (verify this against Rutgers OARC's published value):"
+  say  "  Scanned host key fingerprint:"
   ssh-keygen -lf "$tmp" | sed 's/^/    /'
   say  ""
-  if [[ "$AMAREL_HOST" == "$LEGACY_AMAREL_HOST" ]]; then
-    say  "  Reference fingerprint for $LEGACY_AMAREL_HOST (legacy CentOS 7, recorded 2026-05-26):"
-    say  "    SHA256:cN6l3kR3jbdOv6Ofz1b+KNCt3LaOCj9bq6yeHoR3eLs"
+
+  if [[ -n "$ref" ]]; then
+    say  "  Recorded reference for $AMAREL_HOST ($reftxt):"
+    say  "    $ref"
+    say  ""
+    if [[ -n "$scanned" && "$scanned" == "$ref" ]]; then
+      info "✓ Fingerprint matches the recorded reference — verified automatically."
+    else
+      rm -f "$tmp"
+      err  "  Scanned:   ${scanned:-<none>}"
+      err  "  Recorded:  $ref"
+      die  "FINGERPRINT MISMATCH — possible man-in-the-middle. Do NOT continue; contact Rutgers OARC."
+    fi
   else
-    say  "  Reference fingerprint for $AMAREL_HOST (RHEL 9.6, recorded 2026-06-05):"
-    say  "    SHA256:bKbfUNxVCu2nQvssMuNBFtzoR3J7BxXU5RSI9MjWi+E"
-  fi
-  say  ""
-
-  human "Compare the fingerprint above against what Rutgers OARC publishes. Only continue if they match. A mismatch means a possible man-in-the-middle attack."
-
-  if ! confirm "Does the fingerprint match?"; then
-    rm -f "$tmp"
-    die "Fingerprint mismatch or unverified — aborting."
+    # Non-standard host (AMAREL_HOST override) with no pinned reference — verify by hand.
+    say  "  No reference fingerprint is recorded for $AMAREL_HOST (non-standard host)."
+    human "Compare the fingerprint above against what Rutgers OARC publishes. Only continue if they match. A mismatch means a possible man-in-the-middle attack."
+    if ! confirm "Does the fingerprint match?"; then
+      rm -f "$tmp"
+      die "Fingerprint mismatch or unverified — aborting."
+    fi
   fi
 
   mkdir -p "$(dirname "$KNOWN_HOSTS_PATH")"
@@ -426,6 +446,8 @@ phase_download_tarball() {
   heading "Phase 6 — Download sysroot tarball"
 
   mkdir -p "$(dirname "$TARBALL_LOCAL")"
+
+  reap_prefetch wait   # if a background prefetch is in flight, finish it before checking the cache
 
   if [[ -f "$TARBALL_LOCAL" ]]; then
     info "Tarball already present locally: $TARBALL_LOCAL"
@@ -932,6 +954,38 @@ EOM
 # main
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Optional speed-up: prefetch the sysroot tarball in the BACKGROUND so the
+# (LEGACY-only) download overlaps the interactive auth phases instead of blocking
+# Phase 6. This is purely a cache warm-up, keyed on the target *hostname* as a hint
+# (the legacy host is the one that needs the tarball) — it does NOT decide the
+# install path; Phase 5.5 still routes on the remote glibc. If the hint is wrong (a
+# legacy hostname already upgraded to RHEL 9) the prefetched file just sits cached,
+# unused. Phase 6's checksum verification still gates correctness.
+# ─────────────────────────────────────────────────────────────────────────────
+PREFETCH_PID=""
+
+prefetch_tarball_bg() {
+  [[ -f "$TARBALL_LOCAL" ]] && return 0                       # already cached
+  [[ "$AMAREL_HOST" == "$LEGACY_AMAREL_HOST" ]] || return 0   # native default: nothing to fetch
+  command -v curl >/dev/null 2>&1 || return 0
+  mkdir -p "$(dirname "$TARBALL_LOCAL")"
+  ( curl -fsSL "$TARBALL_URL" -o "$TARBALL_LOCAL.partial" 2>/dev/null \
+      && mv -f "$TARBALL_LOCAL.partial" "$TARBALL_LOCAL" ) &
+  PREFETCH_PID=$!
+  info "Prefetching the sysroot tarball in the background while you authenticate…"
+}
+
+# Reap the background prefetch: 'wait' to consume its result (LEGACY needs it),
+# 'kill' to discard it (NATIVE probed on a legacy hostname — tarball not needed).
+reap_prefetch() {
+  [[ -n "$PREFETCH_PID" ]] || return 0
+  [[ "${1:-wait}" == "kill" ]] && kill "$PREFETCH_PID" 2>/dev/null
+  wait "$PREFETCH_PID" 2>/dev/null || true
+  PREFETCH_PID=""
+  rm -f "$TARBALL_LOCAL.partial" 2>/dev/null || true
+}
+
 main() {
   cat <<EOM
 $(c_bold '==========================================')
@@ -955,6 +1009,7 @@ EOM
   PLATFORM=LEGACY   # safe default until Phase 5.5 probes the remote host
 
   phase_preflight
+  prefetch_tarball_bg   # warm the tarball cache in the background during auth (LEGACY hint only)
   phase_keygen
   phase_known_host
   phase_copy_id
@@ -972,6 +1027,7 @@ EOM
   else
     phase_native_cleanup
   fi
+  reap_prefetch kill   # discard any unconsumed prefetch (e.g. legacy hostname that probed NATIVE)
 
   phase_configure_git
   phase_finish
