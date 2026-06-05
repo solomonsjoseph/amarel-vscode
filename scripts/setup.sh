@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # amarel-vscode setup — macOS / Linux
 #
-# Purpose: One-shot bootstrap of SSH key auth + VS Code Server sysroot on Amarel.
+# Purpose: One-shot bootstrap of SSH key auth + VS Code Server on Amarel. Detects
+#          the remote platform and, on the legacy CentOS 7 host, deploys a
+#          custom-glibc sysroot; on RHEL 9 it relies on the native glibc.
 # Idempotent: re-running this is safe and skips already-completed steps.
 #
 # Security contract:
@@ -20,7 +22,11 @@ set -euo pipefail
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-readonly AMAREL_HOST="amarel.rutgers.edu"
+# Amarel is migrating CentOS 7.9 → RHEL 9.6. The new RHEL 9 login node is the
+# default target; override with AMAREL_HOST=… to point at the legacy host.
+readonly DEFAULT_AMAREL_HOST="amarel-new.hpc.rutgers.edu"
+readonly LEGACY_AMAREL_HOST="amarel.rutgers.edu"
+readonly AMAREL_HOST="${AMAREL_HOST:-$DEFAULT_AMAREL_HOST}"
 readonly SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly SSH_KEY_PATH="${HOME}/.ssh/id_ed25519_amarel"
 readonly SSH_CONFIG_PATH="${HOME}/.ssh/config"
@@ -183,8 +189,13 @@ phase_known_host() {
   say  "  Host key fingerprint (verify this against Rutgers OARC's published value):"
   ssh-keygen -lf "$tmp" | sed 's/^/    /'
   say  ""
-  say  "  Reference fingerprint (recorded 2026-05-26 during initial setup):"
-  say  "    SHA256:cN6l3kR3jbdOv6Ofz1b+KNCt3LaOCj9bq6yeHoR3eLs"
+  if [[ "$AMAREL_HOST" == "$LEGACY_AMAREL_HOST" ]]; then
+    say  "  Reference fingerprint for $LEGACY_AMAREL_HOST (legacy CentOS 7, recorded 2026-05-26):"
+    say  "    SHA256:cN6l3kR3jbdOv6Ofz1b+KNCt3LaOCj9bq6yeHoR3eLs"
+  else
+    say  "  Reference fingerprint for $AMAREL_HOST (RHEL 9.6, recorded 2026-06-05):"
+    say  "    SHA256:bKbfUNxVCu2nQvssMuNBFtzoR3J7BxXU5RSI9MjWi+E"
+  fi
   say  ""
 
   human "Compare the fingerprint above against what Rutgers OARC publishes. Only continue if they match. A mismatch means a possible man-in-the-middle attack."
@@ -329,6 +340,81 @@ phase_verify_passwordless() {
     info "Passwordless SSH works"
   else
     die "Passwordless SSH still failing. Inspect: ssh -v ${AMAREL_USER}@${AMAREL_HOST}"
+  fi
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 5.5 — Detect the remote platform (glibc) and choose the install path
+#
+# Amarel is migrating CentOS 7.9 (glibc 2.17) → RHEL 9.6 (glibc 2.34). VS Code
+# Server 1.99+ needs glibc >= 2.28, so:
+#   glibc >= 2.28  → NATIVE  (RHEL 9): skip the sysroot + signature workarounds
+#   glibc <  2.28  → LEGACY  (CentOS 7): install the custom-glibc sysroot
+# Routing is on the REMOTE glibc, not the hostname, so pointing at either host
+# (or a transition DNS alias) always picks the correct path. An inconclusive
+# probe defaults to LEGACY — a safe superset that, at worst, installs an unneeded
+# sysroot on RHEL 9 rather than stranding a real CentOS 7 user.
+# ─────────────────────────────────────────────────────────────────────────────
+
+phase_detect_platform() {
+  heading "Phase 5.5 — Detect remote platform"
+
+  local probe glibc osrel
+  probe="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "${AMAREL_USER}@${AMAREL_HOST}" \
+            'ldd --version 2>/dev/null | head -1; . /etc/os-release 2>/dev/null; printf "OSREL=%s-%s\n" "${ID:-?}" "${VERSION_ID:-?}"')" \
+    || die "Could not probe the remote platform over SSH (Phase 5 passed, so just re-run; if it persists, check the VPN/connection)."
+
+  # First ldd/libc line's last field is the bare glibc version (e.g. "2.34").
+  glibc="$(printf '%s\n' "$probe" | awk '/[0-9]+\.[0-9]+/ && (/libc/ || /ldd/ || /GLIBC/){print $NF; exit}')"
+  osrel="$(printf '%s\n'  "$probe" | awk -F= '/^OSREL=/{print $2; exit}')"
+
+  if [[ -n "$glibc" ]] && awk -v v="$glibc" 'BEGIN{split(v,a,"."); exit !(((a[1]+0)>2)||((a[1]+0)==2&&(a[2]+0)>=28))}'; then
+    PLATFORM="NATIVE"
+    info "Remote platform: NATIVE — glibc ${glibc}${osrel:+ ($osrel)}; VS Code Server runs natively (skipping sysroot Phases 6–9)"
+  elif [[ -n "$glibc" ]]; then
+    PLATFORM="LEGACY"
+    info "Remote platform: LEGACY — glibc ${glibc}${osrel:+ ($osrel)}; installing the custom-glibc sysroot"
+  else
+    PLATFORM="LEGACY"
+    warn "Could not read the remote glibc version; defaulting to the LEGACY sysroot path (safe — at worst installs an unneeded sysroot on RHEL 9)."
+  fi
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 5.6 — Native host: strip any legacy sysroot residue (NATIVE only)
+# A prior LEGACY run on a shared $HOME leaves the custom-glibc loader in ~/.bashrc
+# (it sources ~/.vscode-server/sysroot.sh, which exports VSCODE_SERVER_CUSTOM_GLIBC_*).
+# VS Code honors those env vars on RHEL 9 and shows the "unsupported OS" dialog +
+# forces the sysroot code path even though native glibc 2.34 needs none of it. So on
+# NATIVE we proactively remove the loader, the sysroot, and any server that was
+# patchelf'd against it (it would fail to start natively). data/ is preserved.
+# ─────────────────────────────────────────────────────────────────────────────
+
+phase_native_cleanup() {
+  heading "Phase 5.6 — Native host: remove any legacy sysroot residue"
+
+  if ! ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" 'bash -se' <<'REMOTE'
+set -u
+cleaned=0
+if [ -f "$HOME/.bashrc" ] && grep -q 'vscode-server/sysroot\.sh' "$HOME/.bashrc" 2>/dev/null; then
+  sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' "$HOME/.bashrc"
+  cleaned=1
+fi
+if [ -e "$HOME/.vscode-server/sysroot" ] || [ -e "$HOME/.vscode-server/sysroot.sh" ] || [ -e "$HOME/sysroot.sh" ]; then
+  rm -rf "$HOME/.vscode-server/sysroot" "$HOME/.vscode-server/sysroot.sh" "$HOME/sysroot.sh"
+  cleaned=1
+fi
+if [ "$cleaned" = 1 ]; then
+  # The server was patchelf'd against the now-removed sysroot; drop the binaries so
+  # VS Code reinstalls a clean native server. Machine/settings.json (data/) is kept.
+  rm -rf "$HOME/.vscode-server/bin" "$HOME/.vscode-server/cli" 2>/dev/null
+  echo "✓ Removed legacy sysroot residue (~/.bashrc loader, sysroot, patched server) — VS Code will reinstall natively"
+else
+  echo "✓ No legacy sysroot residue — clean native host"
+fi
+REMOTE
+  then
+    warn "Native cleanup probe failed (non-fatal). If VS Code shows an 'unsupported OS' dialog, run a full reset on Amarel."
   fi
 }
 
@@ -552,12 +638,15 @@ REMOTE
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 9.5 — Point VS Code at a modern git on Amarel (Source Control fix)
 #
-# VS Code Server resolves bare `git` from its non-interactive PATH = CentOS 7's
-# stock /usr/bin/git 1.8.3.1, too old for VS Code's repo-detection probe
-# (`git rev-parse --git-dir --git-common-dir`; --git-common-dir needs git >= 2.5),
-# so Source Control registers 0 repositories. We point the machine-scoped
-# `git.path` at a modern git (an Lmod module on Amarel) via a wrapper that loads
-# the module, merged into the same Machine settings.json as Phase 9.
+# VS Code Server's repo-detection probe (`git rev-parse --git-dir
+# --git-common-dir`; --git-common-dir needs git >= 2.5) fails when the server
+# resolves an ancient git, so Source Control registers 0 repositories.
+#
+#   LEGACY (CentOS 7): stock /usr/bin/git is 1.8.3.1. Point the machine-scoped
+#     `git.path` at a modern git (an Lmod module) via a wrapper that loads it,
+#     merged into the same Machine settings.json as Phase 9.
+#   NATIVE (RHEL 9): the system git (~2.43) already passes the probe, so we run
+#     the self-test and write NOTHING unless it somehow fails.
 #
 # Surfaced as "Phase 11" in the guided runbooks (SKILL.md / AGENTS.md), which
 # walk the user through the post-connect reload + verify. Idempotent. Non-fatal:
@@ -568,6 +657,97 @@ phase_configure_git() {
   heading "Phase 9.5 — Point VS Code at a modern git (Source Control)"
 
   local rc=0
+
+  if [[ "${PLATFORM:-LEGACY}" == "NATIVE" ]]; then
+    # RHEL 9 native path: the system git (~2.43) already satisfies VS Code's
+    # repo-detection probe. Test it in a clean, server-like env and write git.path
+    # ONLY if the probe fails — a healthy RHEL 9 host gets no override at all.
+    # Seeds settings.json with {} (never the verifySignature key — legacy-only).
+    ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" 'bash -se' <<'REMOTE' || rc=$?
+set -uo pipefail
+SETTINGS_DIR="$HOME/.vscode-server/data/Machine"
+SETTINGS_FILE="$SETTINGS_DIR/settings.json"
+
+ge25() { awk -v v="${1:-0.0}" 'BEGIN{split(v,a,"."); exit !(((a[1]+0)>2)||((a[1]+0)==2&&(a[2]+0)>=5))}'; }
+
+SYS_GIT="$(command -v git 2>/dev/null || true)"
+CLEAN_VER="$([ -n "$SYS_GIT" ] && env -i PATH=/usr/bin:/bin HOME="$HOME" "$SYS_GIT" --version 2>/dev/null | awk '/^git version/{print $3; exit}')"
+
+# VS Code uses the configured git.path if one is set, else bare git. Test exactly
+# that "effective" git — a stale legacy git.path from a shared $HOME (an Lmod
+# wrapper or /projects/community path that may not resolve on RHEL 9; OARC warns
+# module paths can differ) must not silently win and break Source Control.
+CONFIGURED=""
+[ -s "$SETTINGS_FILE" ] && CONFIGURED="$(sed -n 's/.*"git\.path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SETTINGS_FILE" 2>/dev/null | head -1)"
+EFFECTIVE="${CONFIGURED:-$SYS_GIT}"
+TESTREPO="$(mktemp -d "${TMPDIR:-/tmp}/amarel-scm.XXXXXX")"
+"${EFFECTIVE:-/usr/bin/git}" init -q "$TESTREPO" 2>/dev/null || /usr/bin/git init -q "$TESTREPO" 2>/dev/null || true
+if [ -n "$EFFECTIVE" ] \
+   && ( cd "$TESTREPO" && env -i PATH=/usr/bin:/bin HOME="$HOME" "$EFFECTIVE" rev-parse --git-dir --git-common-dir ) >/dev/null 2>&1; then
+  rm -rf "$TESTREPO"
+  if [ -n "$CONFIGURED" ]; then
+    echo "✓ configured git.path ($CONFIGURED) passes VS Code's repo-detection probe — Source Control OK"
+  else
+    echo "✓ system git ${CLEAN_VER:-?} passes VS Code's repo-detection probe — no git.path override needed"
+  fi
+  exit 0
+fi
+rm -rf "$TESTREPO"
+
+# The effective git failed the probe (system git missing/old, or a stale legacy
+# git.path that doesn't resolve on RHEL 9). Pin git.path at the system git,
+# overwriting any stale value, then re-test.
+GITPATH="${SYS_GIT:-/usr/bin/git}"
+mkdir -p "$SETTINGS_DIR"
+if command -v python3 >/dev/null 2>&1; then
+  python3 - "$SETTINGS_FILE" "$GITPATH" <<'PY' || { echo "ERR: settings.json merge failed" >&2; exit 1; }
+import json, os, sys
+path, gp = sys.argv[1], sys.argv[2]
+data = {}
+if os.path.exists(path) and os.path.getsize(path) > 0:
+    with open(path) as f:
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError as exc:
+            sys.exit(f"ERR: {path} is not valid JSON ({exc}); refusing to overwrite")
+    if not isinstance(data, dict):
+        sys.exit(f"ERR: {path} root is not a JSON object; refusing to overwrite")
+data["git.path"] = gp
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(data, f, indent=4)
+    f.write("\n")
+os.replace(tmp, path)
+PY
+elif command -v jq >/dev/null 2>&1; then
+  TMP="$(mktemp "$SETTINGS_DIR/settings.json.XXXXXX")"
+  trap 'rm -f "$TMP"' EXIT
+  if [ -s "$SETTINGS_FILE" ]; then
+    jq --arg gp "$GITPATH" '. + {"git.path": $gp}' "$SETTINGS_FILE" > "$TMP" \
+      || { echo "ERR: $SETTINGS_FILE is not valid JSON; refusing to overwrite" >&2; exit 1; }
+  else
+    jq -n --arg gp "$GITPATH" '{"git.path": $gp}' > "$TMP"
+  fi
+  mv -f "$TMP" "$SETTINGS_FILE"
+else
+  echo "ERR: neither python3 nor jq on Amarel; cannot merge settings.json" >&2
+  exit 1
+fi
+
+# Re-run the probe through the pinned git.path.
+TESTREPO="$(mktemp -d "${TMPDIR:-/tmp}/amarel-scm.XXXXXX")"
+"$GITPATH" init -q "$TESTREPO" 2>/dev/null || /usr/bin/git init -q "$TESTREPO" 2>/dev/null || true
+if ( cd "$TESTREPO" && env -i PATH=/usr/bin:/bin HOME="$HOME" "$GITPATH" rev-parse --git-dir --git-common-dir ) >/dev/null 2>&1; then
+  rm -rf "$TESTREPO"
+  echo "✓ git.path set to $GITPATH + repo-detection self-test PASSED"
+else
+  rm -rf "$TESTREPO"
+  echo "✓ git.path set to $GITPATH"
+  echo "SELFTEST_FAIL: VS Code repo-detection probe did not pass via git.path" >&2
+  exit 4
+fi
+REMOTE
+  else
   ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" 'bash -se' <<'REMOTE' || rc=$?
 set -uo pipefail
 VSROOT="$HOME/.vscode-server"
@@ -706,9 +886,10 @@ else
   exit 4
 fi
 REMOTE
+  fi
 
   if [[ $rc -eq 0 ]]; then
-    info "git.path configured + repo-detection self-test passed — VS Code Source Control will detect your repos"
+    info "Source Control ready — VS Code will detect your repositories"
   elif [[ $rc -eq 3 ]]; then
     warn "No git >= 2.5 found on Amarel; Source Control needs a modern git."
     warn "Run 'module use /projects/community/modulefiles && module spider git' on Amarel, then set git.path in VS Code's Remote settings (see README troubleshooting)."
@@ -736,7 +917,8 @@ phase_finish() {
     2. Cmd+Shift+P (Mac) / Ctrl+Shift+P (Win/Linux)
     3. Type: $(c_bold 'Remote-SSH: Connect to Host')
     4. Pick: $(c_bold "${AMAREL_HOST}")  (or type ${AMAREL_USER}@${AMAREL_HOST})
-    5. First time only: click $(c_bold 'Allow') on the "OS unsupported" warning
+    5. Legacy CentOS 7 host only: click $(c_bold 'Allow') on the "OS unsupported"
+       warning the first time (RHEL 9 / amarel-new shows no such warning)
 
   After that, the bottom-left status bar shows: $(c_green "SSH: ${AMAREL_HOST}")
 
@@ -760,8 +942,8 @@ $(c_bold '==========================================')
     • Generate an SSH keypair for Amarel (if missing)
     • Install your public key on Amarel (one password prompt)
     • Save your key's passphrase in the OS keychain or ssh-agent
-    • Deploy a custom-glibc sysroot to your Amarel \$HOME
-    • Wire it into ~/.bashrc so VS Code Server installs cleanly
+    • Detect the remote platform (RHEL 9 vs legacy CentOS 7)
+    • On legacy CentOS 7 only: deploy a custom-glibc sysroot + wire ~/.bashrc
 
   You'll type two things during setup:
     • Amarel password — once, into ssh-copy-id's prompt
@@ -770,16 +952,27 @@ $(c_bold '==========================================')
 
 EOM
 
+  PLATFORM=LEGACY   # safe default until Phase 5.5 probes the remote host
+
   phase_preflight
   phase_keygen
   phase_known_host
   phase_copy_id
   phase_agent
   phase_verify_passwordless
-  phase_download_tarball
-  phase_deploy
-  phase_verify_env
-  phase_disable_signature_check
+  phase_detect_platform
+
+  # Sysroot + signature workarounds are LEGACY-only (CentOS 7). On RHEL 9 the
+  # native glibc/server make them unnecessary, so Phase 5.5 routes around them.
+  if [[ "$PLATFORM" == "LEGACY" ]]; then
+    phase_download_tarball
+    phase_deploy
+    phase_verify_env
+    phase_disable_signature_check
+  else
+    phase_native_cleanup
+  fi
+
   phase_configure_git
   phase_finish
 }

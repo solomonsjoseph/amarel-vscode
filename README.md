@@ -2,10 +2,12 @@
 ## Set up VS Code Remote-SSH on Rutgers Amarel and fix the GLIBC 2.28 error
 
 Amarel VS Code Skill is a community-maintained setup guide and script for
-Rutgers Amarel users who need VS Code Remote-SSH to work on the CentOS 7
-cluster. It fixes the **`expected GLIBC >= v2.28.0`** error by installing a
-pinned user-space sysroot in your Amarel `$HOME`, with any LLM or no LLM at
-all.
+Rutgers Amarel users who need VS Code Remote-SSH to work. Amarel is migrating
+from CentOS 7 (glibc 2.17) to **RHEL 9.6 (glibc 2.34)** on the new host
+`amarel-new.hpc.rutgers.edu`. On the legacy CentOS 7 host it fixes the
+**`expected GLIBC >= v2.28.0`** error by installing a pinned user-space sysroot
+in your Amarel `$HOME`; on RHEL 9.6 VS Code Server runs natively, so the skill
+auto-detects the host and skips the sysroot. Works with any LLM or no LLM at all.
 
 This is not an official Rutgers or OARC project.
 
@@ -93,7 +95,8 @@ supports uploads):
 
 ```
 I'm a Rutgers researcher setting up VS Code Remote-SSH against the Amarel
-HPC cluster (CentOS 7, glibc 2.17). I'm using this repo:
+HPC cluster, which is migrating from CentOS 7 (glibc 2.17) to RHEL 9.6
+(glibc 2.34) on the new host amarel-new.hpc.rutgers.edu. I'm using this repo:
 https://github.com/solomonsjoseph/amarel-vscode
 
 Read its AGENTS.md:
@@ -122,17 +125,21 @@ Security rules:
 ## How do I use VS Code on Rutgers Amarel?
 
 Install VS Code and the Remote-SSH extension, clone this repo, run the guided
-skill or setup script, then connect to `amarel.rutgers.edu` from VS Code's
-Remote-SSH host picker. The setup creates a dedicated SSH key, verifies
-passwordless SSH, installs the sysroot VS Code Server needs, and prints the
-final GUI steps.
+skill or setup script, then connect to `amarel-new.hpc.rutgers.edu` (the new
+RHEL 9.6 host; the legacy `amarel.rutgers.edu` still works during the transition)
+from VS Code's Remote-SSH host picker. The setup creates a dedicated SSH key,
+verifies passwordless SSH, installs the sysroot VS Code Server needs on the
+legacy host (auto-skipped on RHEL 9.6), and prints the final GUI steps.
 
 ## Why does VS Code fail on Amarel with GLIBC >= 2.28?
 
-Amarel runs CentOS 7 with glibc 2.17, while modern VS Code Server builds need
-glibc 2.28 or newer. This repo installs a pinned user-space glibc 2.28 sysroot
-under your Amarel home directory and configures VS Code Server startup to use
-it.
+The **legacy** Amarel host runs CentOS 7 with glibc 2.17, while modern VS Code
+Server builds need glibc 2.28 or newer — so on that host this repo installs a
+pinned user-space glibc 2.28 sysroot under your Amarel home directory and
+configures VS Code Server startup to use it. The **new** host
+`amarel-new.hpc.rutgers.edu` runs RHEL 9.6 (glibc 2.34), which satisfies VS Code
+natively, so no sysroot is needed there — Phase 5.5 detects the remote glibc and
+routes automatically.
 
 ## Is this only for Claude Code?
 
@@ -181,17 +188,18 @@ Phase 0 of the skill detects your OS and confirms all of these automatically.
 | 3 | `ssh-copy-id` — install your key on Amarel. **Your last Amarel password prompt ever.** |
 | 4 | `ssh-add` — save your key passphrase to the OS keychain |
 | 5 | Verify passwordless SSH works end-to-end |
-| 6 | Download the glibc 2.28 sysroot tarball from GitHub Releases, verify SHA-256 |
-| 7 | Copy the tarball to Amarel, extract it, wire up `~/.bashrc` |
-| 8 | Verify the glibc env vars load in a non-interactive SSH session |
-| 9 | Write `"extensions.verifySignature": false` to VS Code Server's settings on Amarel — required for extensions to install on CentOS 7 with the patched node binary |
+| 5.5 | Detect the remote platform (glibc): RHEL 9.6 → skip the sysroot Phases 6–9; CentOS 7 → run them |
+| 6 | *(legacy CentOS 7 only)* Download the glibc 2.28 sysroot tarball from GitHub Releases, verify SHA-256 |
+| 7 | *(legacy CentOS 7 only)* Copy the tarball to Amarel, extract it, wire up `~/.bashrc` |
+| 8 | *(legacy CentOS 7 only)* Verify the glibc env vars load in a non-interactive SSH session |
+| 9 | *(legacy CentOS 7 only)* Write `"extensions.verifySignature": false` to VS Code Server's settings — needed only when the node binary is patched against the custom glibc |
 | 10 | Print the VS Code GUI steps — connect and you're done |
-| 11 | Point VS Code at a modern git on Amarel (`git.path`) so Source Control detects your repos — CentOS 7's stock git 1.8.3.1 is too old for VS Code's repo probe |
+| 11 | Point VS Code at a modern git on Amarel (`git.path`) so Source Control detects your repos — needed on legacy CentOS 7 (stock git 1.8.3.1); on RHEL 9.6 the system git ~2.43 already passes, so nothing is written |
 | 12 | *(Optional)* Authenticate GitHub on Amarel (`gh auth login`) and set your git identity, so commits and pushes work |
 
-After Phase 10: **VS Code → Remote-SSH: Connect to Host → `amarel.rutgers.edu`**.
-Then, once connected, Phase 11 fixes Source Control and the optional Phase 12
-sets up GitHub.
+After Phase 10: **VS Code → Remote-SSH: Connect to Host → `amarel-new.hpc.rutgers.edu`**
+(or the legacy `amarel.rutgers.edu` during the transition). Then, once connected,
+Phase 11 fixes Source Control and the optional Phase 12 sets up GitHub.
 
 ---
 
@@ -200,13 +208,13 @@ sets up GitHub.
 | Symptom | Fix |
 |---------|-----|
 | `VPN check failed` | Connect to Rutgers VPN and re-run. |
-| `Permission denied (publickey,...)` after Phase 3 | Fix permissions on Amarel: `ssh amarel.rutgers.edu 'chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys'` |
-| `expected GLIBC >= v2.28.0` still appears | Phase 8 catches this. If it persists after Phase 8 passes, remove the stale server cache: `ssh amarel.rutgers.edu 'chmod -R u+w ~/.vscode-server/cli && rm -rf ~/.vscode-server/cli'` |
+| `Permission denied (publickey,...)` after Phase 3 | Fix permissions on Amarel: `ssh amarel-new.hpc.rutgers.edu 'chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys'` |
+| `expected GLIBC >= v2.28.0` still appears *(legacy CentOS 7 host)* | Phase 8 catches this. If it persists after Phase 8 passes, remove the stale server cache: `ssh amarel.rutgers.edu 'chmod -R u+w ~/.vscode-server/cli && rm -rf ~/.vscode-server/cli'`. On RHEL 9.6 (amarel-new) this error should not appear at all. |
 | Tarball download fails | GitHub release not yet published, or your network blocks GitHub. Rebuild locally: `./scripts/build-sysroot.sh` (requires Docker). |
 | Env vars not loading in non-interactive shells | Check `~/.bashrc` on Amarel for an early `return` that skips the source line — move the sysroot block to the top. |
-| Extension install fails (`signature verification failed`) | Phase 9 handles this and is idempotent — re-run the skill from Phase 9. |
+| Extension install fails (`signature verification failed`) | On legacy CentOS 7, Phase 9 handles this and is idempotent — re-run from Phase 9. On RHEL 9.6 it's rare; merge `"extensions.verifySignature": false` into `~/.vscode-server/data/Machine/settings.json` by hand. |
 | Host fingerprint doesn't match OARC's published value | **Stop immediately. Possible MITM attack. Contact OARC.** |
-| Source Control shows "no Git repository" / "Initialize Repository" on a real clone | VS Code Server is using CentOS 7's git 1.8.3.1, too old for its repo probe. Phase 11 sets `git.path` to a modern git in the remote Machine settings (on Amarel, `module use /projects/community/modulefiles` then `module load git` — the git modules aren't on the default `MODULEPATH`), then self-tests that VS Code will detect repos; `setup.sh` / `setup.ps1` apply and self-test it automatically. Deep dive: [docs/source-control-git-fix.md](docs/source-control-git-fix.md). |
+| Source Control shows "no Git repository" / "Initialize Repository" on a real clone | VS Code Server is using CentOS 7's git 1.8.3.1, too old for its repo probe. Phase 11 sets `git.path` to a modern git in the remote Machine settings (on Amarel, `module use /projects/community/modulefiles` then `module load git` — the git modules aren't on the default `MODULEPATH`), then self-tests that VS Code will detect repos; `setup.sh` / `setup.ps1` apply and self-test it automatically. **On RHEL 9.6 (amarel-new) the system git (~2.43) already passes the probe, so Phase 11 writes nothing.** Deep dive: [docs/source-control-git-fix.md](docs/source-control-git-fix.md). |
 | Push rejected with `GH007` | Only happens when GitHub's "Keep my email address private" is on. Use your no-reply email (safe on any account), then re-stamp the commit: `git config --global user.email <id>+<user>@users.noreply.github.com && git commit --amend --reset-author --no-edit`, then push. Phase 12 covers GitHub auth + identity for both private and non-private accounts. |
 
 ---

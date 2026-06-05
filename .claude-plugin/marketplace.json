@@ -11,7 +11,7 @@
       "name": "amarel-vscode",
       "source": "./",
       "description": "Amarel VS Code Skill for Rutgers Amarel: set up VS Code Remote-SSH and fix the GLIBC 2.28 error. Works with Claude Code, Codex, or no LLM.",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "author": {
         "name": "Community"
       },
