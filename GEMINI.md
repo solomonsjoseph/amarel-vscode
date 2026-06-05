@@ -21,9 +21,7 @@ Remote-SSH GLIBC error":
    phase, give them the exact command in a fenced block, tell them the
    success marker, wait for them to paste the result, then advance.
    (Phases 0–10 = SSH key auth + sysroot setup; **Phase 5.5** auto-detects the
-   remote platform and skips the sysroot Phases 6–9 on RHEL 9.6; **Phase 5.5c**
-   (NATIVE only) tells the user to delete the stale `amarel.rutgers.edu` entry
-   from VS Code Recents (an SSH alias would break workspace URI resolution); **Phase 11**
+   remote platform and skips the sysroot Phases 6–9 on RHEL 9.6; **Phase 11**
    points VS Code at a modern git on Amarel so Source Control detects repos;
    **Phase 12** is optional GitHub auth + git identity.) **If the user is already connected and
    only Source Control / git (or GitHub) is broken, use the Phase 0.2 fast path

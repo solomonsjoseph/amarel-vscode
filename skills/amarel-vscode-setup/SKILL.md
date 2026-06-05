@@ -1067,28 +1067,7 @@ REMOTE
 ```
 
 **Success marker:** either `✓ Removed legacy sysroot residue …` or `✓ No legacy
-sysroot residue …`. Then continue to **Phase 5.5c**.
-
-### 5.5c — NATIVE only: remove stale `amarel.rutgers.edu` entry from VS Code Recents (user turn)
-
-VS Code's **Recents** tab caches hostnames. If you previously connected via
-`amarel.rutgers.edu` (the old CentOS 7 host), that stale entry still appears in
-the dropdown and lands on the old host (glibc 2.17 → `GLIBC >= 2.28` error).
-
-> **Do NOT** add an SSH `HostName` alias to redirect `amarel.rutgers.edu` →
-> `amarel-new.hpc.rutgers.edu`. VS Code encodes the connection hostname into
-> workspace URIs (`vscode-remote://ssh-remote%2Bamarel.rutgers.edu/...`). An
-> aliased connection has a different identity than a direct connection, so any
-> folder previously opened via `amarel-new.hpc.rutgers.edu` becomes unresolvable
-> (`Unable to resolve resource …`) and VS Code enters a reconnection loop.
-
-**Only on `PLATFORM=NATIVE` — skip if the user is doing a fresh first-time setup (no prior VS Code connections to Amarel).**
-
-> **🔒 YOUR TURN:** In VS Code, open the Command Palette (`Cmd/Ctrl+Shift+P`),
-> run **Remote-SSH: Remove Recent Host**, and remove `amarel.rutgers.edu` if it
-> appears in the list. Nothing else needed — no SSH config change.
-
-**Success:** `amarel.rutgers.edu` no longer appears in the Remote-SSH Recents dropdown. Then continue to **Phase 10** (Connect).
+sysroot residue …`. Then continue to **Phase 10** (Connect).
 
 ---
 
