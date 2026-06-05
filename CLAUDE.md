@@ -74,3 +74,17 @@ The Phase 2 reference fingerprint is **host-aware** and **both hosts are now pin
 - "🔒 YOUR TURN" is the convention for any prompt the user must type into (vs. confirmations or info lines). Preserve the marker if you add new interactive steps.
 - The repo ships **five** plugin/extension manifests — Claude (`.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json`), Codex (`.codex-plugin/plugin.json` + `.agents/plugins/marketplace.json`), and Gemini (`gemini-extension.json`). Keep `name` (`amarel-vscode`) and `version` identical across all five (and `PLUGIN_NAME` in `install.{sh,ps1}`). Within each ecosystem the plugin manifest wins if it diverges from its marketplace entry (`claude plugin tag` enforces the Claude pair). Never reintroduce a repo-root `plugin.json` — Claude reads only `.claude-plugin/plugin.json`.
 - `gemini extensions install <url>` (no `--ref`) installs from the latest **GitHub Release**, not the default branch — so the documented Gemini command uses **`--ref main`**. Our releases carry the sysroot tarball (`setup.sh` reads `releases/latest/download/…`) and predate `gemini-extension.json`. To enable the bare (no-`--ref`) command, a future release must include `gemini-extension.json` **and** still attach the sysroot tarball asset, or `setup.sh`'s download breaks. (Claude's `/plugin marketplace add` and Codex's `codex plugin marketplace add` read the default branch directly, so they need no release.)
+
+## Status
+
+**The skill is fully functional as of 2026-06-05.** End-to-end validated on a fresh account against `amarel-new.hpc.rutgers.edu` (RHEL 9.6, NATIVE path). All phases 0–12 pass. Legacy CentOS 7 path is maintained but not re-validated since the RHEL 9.6 migration.
+
+## Known issues / future work
+
+These are low-priority bugs confirmed during the 2026-05-29 live run. The skill works end-to-end despite them — they affect edge cases in resume/fresh-start flows.
+
+1. **Phase 3.0 skip-probe false-positive** (tracked in GitHub issue #14): if stale Amarel keys remain in `ssh-agent` from a previous session but have not been installed on Amarel yet, the Phase 3.0 BatchMode probe succeeds (agent offers the key, server rejects it quietly), causing Phase 3 (`ssh-copy-id`) to be incorrectly skipped. Fix: tighten the probe to verify the key is actually accepted, not just attempted.
+
+2. **Fresh-start reset wipes `known_hosts` before the Amarel cleanup** (tracked in GitHub issue #15): the reset removes the Amarel `known_hosts` entry early in the wipe sequence, so the subsequent SSH-based Amarel-side cleanup (sysroot removal, `authorized_keys` scrub) cannot connect and is silently skipped. Fix: reorder the reset — run the remote cleanup first while the host entry still exists, then wipe `known_hosts`.
+
+3. **ControlMaster socket goes stale** (tracked in GitHub issue #16): `ControlMaster auto` + `ControlPersist 10m` in `~/.ssh/config` creates a shared socket that outlives the master SSH process after the persist window expires. VS Code then hangs with "Unable to resolve resource" when it tries to reuse the dead socket. Fix: add a troubleshooting entry, or remove `ControlMaster`/`ControlPersist` from the skill-written `ssh_config` block.
