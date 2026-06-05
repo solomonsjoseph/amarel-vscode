@@ -515,9 +515,12 @@ ssh-keygen -lf "$HOME\.ssh\amarel_hostkey.pending"
 >   ```
 >
 > - **New host `amarel-new.hpc.rutgers.edu` (RHEL 9.6):** a *different machine
->   with a different host key* — the pin above does **not** apply. No reference
->   is recorded yet; verify the scanned value directly against OARC's published
->   fingerprint for amarel-new. *(Maintainer: pin it here once known.)*
+>   with a different host key* — the legacy pin above does **not** apply. The
+>   reference fingerprint recorded on 2026-06-05 is:
+>
+>   ```
+>   SHA256:bKbfUNxVCu2nQvssMuNBFtzoR3J7BxXU5RSI9MjWi+E
+>   ```
 >
 > **Only continue if your output matches the correct host's value. A mismatch
 > means a possible man-in-the-middle attack — STOP and contact OARC.**

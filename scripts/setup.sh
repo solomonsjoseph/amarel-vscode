@@ -190,13 +190,11 @@ phase_known_host() {
   ssh-keygen -lf "$tmp" | sed 's/^/    /'
   say  ""
   if [[ "$AMAREL_HOST" == "$LEGACY_AMAREL_HOST" ]]; then
-    say  "  Reference fingerprint for $LEGACY_AMAREL_HOST (recorded 2026-05-26):"
+    say  "  Reference fingerprint for $LEGACY_AMAREL_HOST (legacy CentOS 7, recorded 2026-05-26):"
     say  "    SHA256:cN6l3kR3jbdOv6Ofz1b+KNCt3LaOCj9bq6yeHoR3eLs"
   else
-    # MAINTAINER TODO: pin amarel-new.hpc.rutgers.edu's ed25519 fingerprint here
-    # once OARC publishes it (or it is confirmed out-of-band on a trusted network).
-    say  "  No reference fingerprint is recorded yet for $AMAREL_HOST."
-    say  "  Verify the value above directly against Rutgers OARC's published fingerprint."
+    say  "  Reference fingerprint for $AMAREL_HOST (RHEL 9.6, recorded 2026-06-05):"
+    say  "    SHA256:bKbfUNxVCu2nQvssMuNBFtzoR3J7BxXU5RSI9MjWi+E"
   fi
   say  ""
 

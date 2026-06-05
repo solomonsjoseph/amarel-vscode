@@ -63,7 +63,7 @@ The release flow (see README "Maintainer notes"): `build-sysroot.sh` → update 
 
 A fingerprint mismatch in Phase 2 is a hard stop — possible MITM. Do not work around it; tell the user to contact OARC.
 
-The Phase 2 reference fingerprint is **host-aware**: the recorded `SHA256:cN6l3k…` value is the **legacy** `amarel.rutgers.edu` key only. **`amarel-new.hpc.rutgers.edu` has no pinned reference yet** — the scripts and runbooks tell the user to verify the scanned key against OARC's published value. ⚠️ **Maintainer TODO:** once OARC provides it, pin amarel-new's ed25519 fingerprint in three places (`scripts/setup.sh`, `scripts/setup.ps1`, the Phase 2.2 block in `SKILL.md`/`AGENTS.md`), replacing the "no reference recorded yet" wording.
+The Phase 2 reference fingerprint is **host-aware** and **both hosts are now pinned**: legacy `amarel.rutgers.edu` (CentOS 7) → `SHA256:cN6l3k…` (recorded 2026-05-26); new `amarel-new.hpc.rutgers.edu` (RHEL 9.6) → `SHA256:bKbfUNxVCu2nQvssMuNBFtzoR3J7BxXU5RSI9MjWi+E` (recorded 2026-06-05, ed25519, confirmed by two independent reads — live first-connect prompt + local `ssh-keyscan` — and distinct from the legacy key, which OARC confirmed was rotated for RHEL9). The pins live in three places kept in lockstep: `scripts/setup.sh`, `scripts/setup.ps1`, and the Phase 2.2 block in `SKILL.md`/`AGENTS.md`. If OARC rotates a key again, update all three together and never re-pin just because a key stopped matching.
 
 ## Conventions worth knowing
 

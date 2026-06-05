@@ -186,13 +186,11 @@ function Invoke-PhaseKnownHost {
   & ssh-keygen -lf $tmp.FullName | ForEach-Object { "    $_" }
   Write-Host ""
   if ($AmarelHost -eq $LegacyAmarelHost) {
-    Write-Host "  Reference fingerprint for $LegacyAmarelHost (recorded 2026-05-26):"
+    Write-Host "  Reference fingerprint for $LegacyAmarelHost (legacy CentOS 7, recorded 2026-05-26):"
     Write-Host "    SHA256:cN6l3kR3jbdOv6Ofz1b+KNCt3LaOCj9bq6yeHoR3eLs"
   } else {
-    # MAINTAINER TODO: pin amarel-new.hpc.rutgers.edu's ed25519 fingerprint here
-    # once OARC publishes it (or it is confirmed out-of-band on a trusted network).
-    Write-Host "  No reference fingerprint is recorded yet for $AmarelHost."
-    Write-Host "  Verify the value above directly against Rutgers OARC's published fingerprint."
+    Write-Host "  Reference fingerprint for $AmarelHost (RHEL 9.6, recorded 2026-06-05):"
+    Write-Host "    SHA256:bKbfUNxVCu2nQvssMuNBFtzoR3J7BxXU5RSI9MjWi+E"
   }
   Write-Host ""
 

@@ -39,10 +39,17 @@ Remote-SSH GLIBC error":
    question** — don't take "done" as proof. And skip steps already in place
    (resume) while cleaning stale residue on a fresh start. See `AGENTS.md`
    execution-contract point 5.
+7. **Dual-host transition.** The runbooks default to `amarel-new.hpc.rutgers.edu`.
+   Command literals target the new host, but skip-probe / `known_hosts` / `ssh_config` /
+   reset regexes in the runbooks are deliberately **widened** to `amarel(-new\.hpc)?\.rutgers\.edu`
+   to match **both** hosts. Do **not** blanket find/replace the hostname.
 
 **Security: you must not** read `~/.ssh/id_*` private keys, invoke `sshpass`/
 `expect`, query OS keychains, or weaken `BatchMode=yes` constraints. See
-`AGENTS.md` § "Security constraints" for the complete list.
+`AGENTS.md` § "Security constraints" for the complete list. A fingerprint mismatch
+in Phase 2 is a hard stop. Note: **the Phase 2 reference fingerprint is host-aware**
+and both hosts are pinned (legacy `amarel.rutgers.edu` → `SHA256:cN6l3k…`;
+`amarel-new.hpc.rutgers.edu` → `SHA256:bKbfUNxVCu2nQvssMuNBFtzoR3J7BxXU5RSI9MjWi+E`).
 
 ## Installation as a Local Skill/Plugin
 
