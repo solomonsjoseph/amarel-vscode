@@ -1067,7 +1067,53 @@ REMOTE
 ```
 
 **Success marker:** either `✓ Removed legacy sysroot residue …` or `✓ No legacy
-sysroot residue …`. Then continue to **Phase 10** (Connect).
+sysroot residue …`. Then continue to **Phase 5.5c**.
+
+### 5.5c — NATIVE only: add `amarel.rutgers.edu` alias to `ssh_config` (run this yourself)
+
+VS Code's **Recents** tab caches hostnames. A user who previously connected via
+`amarel.rutgers.edu` (the legacy CentOS 7 host) will see that stale entry in the
+dropdown and land on the old host (glibc 2.17 → `GLIBC >= 2.28` error) even after
+a clean NATIVE setup. Adding an alias makes any click on the old hostname
+transparently redirect to `amarel-new.hpc.rutgers.edu` — so stale Recents entries
+and copy-pasted commands both work without hitting the wrong host.
+
+**Only run on `PLATFORM=NATIVE`.** Check whether the alias block already exists
+first, then append if absent:
+
+**macOS/Linux:**
+
+[EXEC]
+```bash
+grep -qE '^Host amarel\.rutgers\.edu' ~/.ssh/config 2>/dev/null && echo "ALIAS_EXISTS — skip 5.5c" || {
+cat >> ~/.ssh/config <<EOF
+
+Host amarel.rutgers.edu
+    HostName amarel-new.hpc.rutgers.edu
+    User <NetID>
+    IdentityFile ~/.ssh/id_ed25519_amarel
+    IdentitiesOnly yes
+EOF
+echo "✓ alias added"
+}
+ssh -G amarel.rutgers.edu | grep '^hostname '
+```
+
+**Windows PowerShell:**
+
+[EXEC]
+```powershell
+$cfg = "$HOME\.ssh\config"
+if ((Get-Content $cfg -ErrorAction SilentlyContinue) -match '^Host amarel\.rutgers\.edu') {
+  "ALIAS_EXISTS — skip 5.5c"
+} else {
+  Add-Content -Path $cfg -Value "`nHost amarel.rutgers.edu`n    HostName amarel-new.hpc.rutgers.edu`n    User <NetID>`n    IdentityFile ~/.ssh/id_ed25519_amarel`n    IdentitiesOnly yes"
+  "✓ alias added"
+}
+& ssh -G amarel.rutgers.edu | Select-String '^hostname '
+```
+
+**Success marker:** `hostname amarel-new.hpc.rutgers.edu`. Then continue to **Phase 10** (Connect).
 
 ---
 
