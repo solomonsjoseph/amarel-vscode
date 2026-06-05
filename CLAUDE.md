@@ -27,6 +27,7 @@ If you edit one runbook file, keep the others in sync. The mirrors are:
 ./scripts/setup.sh                    # macOS / Linux
 pwsh scripts/setup.ps1                # Windows
 AMAREL_USER=netid ./scripts/setup.sh  # non-interactive username
+AMAREL_HOST=amarel.rutgers.edu ./scripts/setup.sh   # target the legacy CentOS 7 host (default: amarel-new.hpc.rutgers.edu)
 
 # Per-LLM plugin install (no clone):
 #   Claude Code:  /plugin marketplace add solomonsjoseph/amarel-vscode  then  /plugin install amarel-vscode@amarel-vscode
@@ -62,9 +63,12 @@ The release flow (see README "Maintainer notes"): `build-sysroot.sh` → update 
 
 A fingerprint mismatch in Phase 2 is a hard stop — possible MITM. Do not work around it; tell the user to contact OARC.
 
+The Phase 2 reference fingerprint is **host-aware**: the recorded `SHA256:cN6l3k…` value is the **legacy** `amarel.rutgers.edu` key only. **`amarel-new.hpc.rutgers.edu` has no pinned reference yet** — the scripts and runbooks tell the user to verify the scanned key against OARC's published value. ⚠️ **Maintainer TODO:** once OARC provides it, pin amarel-new's ed25519 fingerprint in three places (`scripts/setup.sh`, `scripts/setup.ps1`, the Phase 2.2 block in `SKILL.md`/`AGENTS.md`), replacing the "no reference recorded yet" wording.
+
 ## Conventions worth knowing
 
 - The phase numbering is load-bearing — error messages, the README troubleshooting table, `skills/amarel-vscode-setup/SKILL.md`, `AGENTS.md`, and `GEMINI.md` all reference phases by number. The runbooks run 0–12 (5.5 = remote-platform probe, 11 = Source Control git.path, 12 = optional GitHub); the scripts run 0–10 plus 5.5 (remote-platform probe) and 9.5 (the git.path step the runbooks surface as Phase 11). Don't renumber existing phases; append at the end, or insert with `.5`.
+- **Dual-host during the transition.** The runbooks default to `amarel-new.hpc.rutgers.edu`; the legacy `amarel.rutgers.edu` is still supported and routing is by remote **glibc, never hostname** (Phase 5.5), so a transition DNS alias is handled correctly. Command literals target the new host, but the skip-probe / `known_hosts` / `ssh_config` / reset regexes in the runbooks are deliberately **widened** to `amarel(-new\.hpc)?\.rutgers\.edu` so they match **both** hosts. Do **not** blanket find/replace the hostname — a naive sed flips those widened regexes to a single host and breaks cleanup/detection for the other. In the scripts, the host is the single `AMAREL_HOST`/`$AmarelHost` constant (env-overridable); flip the default there, not inline.
 - Phase 0 owns local OS detection. Do not ask the user whether they are on macOS, Linux, or Windows; infer it from context or the Phase 0 output and branch from there.
 - Scripts must remain idempotent. Re-running after any failure is the supported recovery path; don't introduce state that breaks on re-run.
 - "🔒 YOUR TURN" is the convention for any prompt the user must type into (vs. confirmations or info lines). Preserve the marker if you add new interactive steps.
