@@ -511,32 +511,33 @@ ssh-keygen -lf "$HOME\.ssh\amarel_hostkey.pending"
 
 **Show the fingerprint output to the user.**
 
-### 2.2 — User fingerprint verification
+### 2.2 — Verify the fingerprint (you auto-compare against the pin)
 
-> **🔒 YOUR TURN:** Compare the `SHA256:…` value above against Rutgers OARC's
-> published fingerprint.
->
-> - **Legacy host `amarel.rutgers.edu` (CentOS 7):** the reference fingerprint
->   recorded on 2026-05-26 is:
->
->   ```
->   SHA256:cN6l3kR3jbdOv6Ofz1b+KNCt3LaOCj9bq6yeHoR3eLs
->   ```
->
-> - **New host `amarel-new.hpc.rutgers.edu` (RHEL 9.6):** a *different machine
->   with a different host key* — the legacy pin above does **not** apply. The
->   reference fingerprint recorded on 2026-06-05 is:
->
->   ```
->   SHA256:bKbfUNxVCu2nQvssMuNBFtzoR3J7BxXU5RSI9MjWi+E
->   ```
->
-> **Only continue if your output matches the correct host's value. A mismatch
-> means a possible man-in-the-middle attack — STOP and contact OARC.**
->
-> If OARC confirms a host key was legitimately rotated and gives you the new
-> fingerprint out-of-band, replace the reference value above with the confirmed
-> one and re-run Phase 2. Never update the pin just because it stopped matching.
+**Both transition hosts are pinned, so verify this yourself — do not make the user
+eyeball it.** Compare the `SHA256:…` from 2.1 against the recorded reference for the
+targeted host:
+
+- **`amarel-new.hpc.rutgers.edu` (RHEL 9.6, default):**
+  `SHA256:bKbfUNxVCu2nQvssMuNBFtzoR3J7BxXU5RSI9MjWi+E` (recorded 2026-06-05)
+- **`amarel.rutgers.edu` (legacy CentOS 7):**
+  `SHA256:cN6l3kR3jbdOv6Ofz1b+KNCt3LaOCj9bq6yeHoR3eLs` (recorded 2026-05-26)
+
+Then act on the result:
+
+- **Match** → tell the user `✓ matches the recorded <host> fingerprint — verified`
+  and continue to **2.3**. No user prompt needed.
+- **Mismatch** → **HARD STOP.** Show both the scanned and recorded values and tell
+  the user this is a possible man-in-the-middle attack — **STOP and contact OARC**.
+  Do **not** append the key or proceed.
+- **Non-standard host** (a deliberate `AMAREL_HOST` that is neither pinned host) →
+  there is no pin to check against, so fall back to the user:
+  > **🔒 YOUR TURN:** No reference is recorded for this host. Compare the `SHA256:…`
+  > above against Rutgers OARC's published value and confirm before continuing.
+
+A security-conscious user may still cross-check the matched value against OARC. If
+OARC confirms a key was legitimately rotated and gives you the new fingerprint
+out-of-band, replace the pinned reference above and re-run Phase 2 — never update a
+pin just because it stopped matching.
 
 ### 2.3 — Append exact temp file on user "yes" (run yourself)
 

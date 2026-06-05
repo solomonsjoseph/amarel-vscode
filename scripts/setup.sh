@@ -185,24 +185,44 @@ phase_known_host() {
   ssh-keyscan -t ed25519 "$AMAREL_HOST" 2>/dev/null > "$tmp" \
     || die "Could not retrieve host key from $AMAREL_HOST. (Are you on the VPN?)"
 
+  # The scanned SHA256 fingerprint (field 2 of `ssh-keygen -lf`).
+  local scanned
+  scanned="$(ssh-keygen -lf "$tmp" 2>/dev/null | awk 'NR==1{print $2}')"
+
+  # Pinned reference for this host. Both transition hosts are pinned, so the happy
+  # path verifies automatically; only a non-standard AMAREL_HOST override has no pin.
+  local ref="" reftxt=""
+  if [[ "$AMAREL_HOST" == "$LEGACY_AMAREL_HOST" ]]; then
+    ref="SHA256:cN6l3kR3jbdOv6Ofz1b+KNCt3LaOCj9bq6yeHoR3eLs"; reftxt="legacy CentOS 7, recorded 2026-05-26"
+  elif [[ "$AMAREL_HOST" == "$DEFAULT_AMAREL_HOST" ]]; then
+    ref="SHA256:bKbfUNxVCu2nQvssMuNBFtzoR3J7BxXU5RSI9MjWi+E"; reftxt="RHEL 9.6, recorded 2026-06-05"
+  fi
+
   say  ""
-  say  "  Host key fingerprint (verify this against Rutgers OARC's published value):"
+  say  "  Scanned host key fingerprint:"
   ssh-keygen -lf "$tmp" | sed 's/^/    /'
   say  ""
-  if [[ "$AMAREL_HOST" == "$LEGACY_AMAREL_HOST" ]]; then
-    say  "  Reference fingerprint for $LEGACY_AMAREL_HOST (legacy CentOS 7, recorded 2026-05-26):"
-    say  "    SHA256:cN6l3kR3jbdOv6Ofz1b+KNCt3LaOCj9bq6yeHoR3eLs"
+
+  if [[ -n "$ref" ]]; then
+    say  "  Recorded reference for $AMAREL_HOST ($reftxt):"
+    say  "    $ref"
+    say  ""
+    if [[ -n "$scanned" && "$scanned" == "$ref" ]]; then
+      info "✓ Fingerprint matches the recorded reference — verified automatically."
+    else
+      rm -f "$tmp"
+      err  "  Scanned:   ${scanned:-<none>}"
+      err  "  Recorded:  $ref"
+      die  "FINGERPRINT MISMATCH — possible man-in-the-middle. Do NOT continue; contact Rutgers OARC."
+    fi
   else
-    say  "  Reference fingerprint for $AMAREL_HOST (RHEL 9.6, recorded 2026-06-05):"
-    say  "    SHA256:bKbfUNxVCu2nQvssMuNBFtzoR3J7BxXU5RSI9MjWi+E"
-  fi
-  say  ""
-
-  human "Compare the fingerprint above against what Rutgers OARC publishes. Only continue if they match. A mismatch means a possible man-in-the-middle attack."
-
-  if ! confirm "Does the fingerprint match?"; then
-    rm -f "$tmp"
-    die "Fingerprint mismatch or unverified — aborting."
+    # Non-standard host (AMAREL_HOST override) with no pinned reference — verify by hand.
+    say  "  No reference fingerprint is recorded for $AMAREL_HOST (non-standard host)."
+    human "Compare the fingerprint above against what Rutgers OARC publishes. Only continue if they match. A mismatch means a possible man-in-the-middle attack."
+    if ! confirm "Does the fingerprint match?"; then
+      rm -f "$tmp"
+      die "Fingerprint mismatch or unverified — aborting."
+    fi
   fi
 
   mkdir -p "$(dirname "$KNOWN_HOSTS_PATH")"

@@ -181,24 +181,42 @@ function Invoke-PhaseKnownHost {
     Die "Could not retrieve host key from $AmarelHost. (Are you on the VPN?)"
   }
 
+  # The scanned SHA256 fingerprint (field 2 of `ssh-keygen -lf`).
+  $scanned = (& ssh-keygen -lf $tmp.FullName | Select-Object -First 1) -split '\s+' | Select-Object -Index 1
+
+  # Pinned reference for this host. Both transition hosts are pinned, so the happy
+  # path verifies automatically; only a non-standard AMAREL_HOST override has no pin.
+  $ref = ''; $refTxt = ''
+  if ($AmarelHost -eq $LegacyAmarelHost) {
+    $ref = 'SHA256:cN6l3kR3jbdOv6Ofz1b+KNCt3LaOCj9bq6yeHoR3eLs'; $refTxt = 'legacy CentOS 7, recorded 2026-05-26'
+  } elseif ($AmarelHost -eq $DefaultAmarelHost) {
+    $ref = 'SHA256:bKbfUNxVCu2nQvssMuNBFtzoR3J7BxXU5RSI9MjWi+E'; $refTxt = 'RHEL 9.6, recorded 2026-06-05'
+  }
+
   Write-Host ""
-  Write-Host "  Host key fingerprint (verify this against Rutgers OARC's published value):"
+  Write-Host "  Scanned host key fingerprint:"
   & ssh-keygen -lf $tmp.FullName | ForEach-Object { "    $_" }
   Write-Host ""
-  if ($AmarelHost -eq $LegacyAmarelHost) {
-    Write-Host "  Reference fingerprint for $LegacyAmarelHost (legacy CentOS 7, recorded 2026-05-26):"
-    Write-Host "    SHA256:cN6l3kR3jbdOv6Ofz1b+KNCt3LaOCj9bq6yeHoR3eLs"
+
+  if ($ref) {
+    Write-Host "  Recorded reference for $AmarelHost ($refTxt):"
+    Write-Host "    $ref"
+    Write-Host ""
+    if ($scanned -and $scanned -eq $ref) {
+      Write-Info "✓ Fingerprint matches the recorded reference — verified automatically."
+    } else {
+      Remove-Item $tmp -Force
+      Write-Err "  Scanned:   $(if ($scanned) { $scanned } else { '<none>' })"
+      Write-Err "  Recorded:  $ref"
+      Die "FINGERPRINT MISMATCH — possible man-in-the-middle. Do NOT continue; contact Rutgers OARC."
+    }
   } else {
-    Write-Host "  Reference fingerprint for $AmarelHost (RHEL 9.6, recorded 2026-06-05):"
-    Write-Host "    SHA256:bKbfUNxVCu2nQvssMuNBFtzoR3J7BxXU5RSI9MjWi+E"
-  }
-  Write-Host ""
-
-  Write-Human "Compare the fingerprint above against what Rutgers OARC publishes. Only continue if they match. A mismatch means a possible man-in-the-middle attack."
-
-  if (-not (Confirm-User "Does the fingerprint match?")) {
-    Remove-Item $tmp -Force
-    Die "Fingerprint mismatch or unverified — aborting."
+    Write-Host "  No reference fingerprint is recorded for $AmarelHost (non-standard host)."
+    Write-Human "Compare the fingerprint above against what Rutgers OARC publishes. Only continue if they match. A mismatch means a possible man-in-the-middle attack."
+    if (-not (Confirm-User "Does the fingerprint match?")) {
+      Remove-Item $tmp -Force
+      Die "Fingerprint mismatch or unverified — aborting."
+    }
   }
 
   if (-not (Test-Path $KnownHostsPath)) { New-Item -ItemType File -Path $KnownHostsPath -Force | Out-Null }
