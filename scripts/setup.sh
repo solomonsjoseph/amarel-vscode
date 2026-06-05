@@ -447,6 +447,8 @@ phase_download_tarball() {
 
   mkdir -p "$(dirname "$TARBALL_LOCAL")"
 
+  reap_prefetch wait   # if a background prefetch is in flight, finish it before checking the cache
+
   if [[ -f "$TARBALL_LOCAL" ]]; then
     info "Tarball already present locally: $TARBALL_LOCAL"
   else
@@ -952,6 +954,38 @@ EOM
 # main
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Optional speed-up: prefetch the sysroot tarball in the BACKGROUND so the
+# (LEGACY-only) download overlaps the interactive auth phases instead of blocking
+# Phase 6. This is purely a cache warm-up, keyed on the target *hostname* as a hint
+# (the legacy host is the one that needs the tarball) — it does NOT decide the
+# install path; Phase 5.5 still routes on the remote glibc. If the hint is wrong (a
+# legacy hostname already upgraded to RHEL 9) the prefetched file just sits cached,
+# unused. Phase 6's checksum verification still gates correctness.
+# ─────────────────────────────────────────────────────────────────────────────
+PREFETCH_PID=""
+
+prefetch_tarball_bg() {
+  [[ -f "$TARBALL_LOCAL" ]] && return 0                       # already cached
+  [[ "$AMAREL_HOST" == "$LEGACY_AMAREL_HOST" ]] || return 0   # native default: nothing to fetch
+  command -v curl >/dev/null 2>&1 || return 0
+  mkdir -p "$(dirname "$TARBALL_LOCAL")"
+  ( curl -fsSL "$TARBALL_URL" -o "$TARBALL_LOCAL.partial" 2>/dev/null \
+      && mv -f "$TARBALL_LOCAL.partial" "$TARBALL_LOCAL" ) &
+  PREFETCH_PID=$!
+  info "Prefetching the sysroot tarball in the background while you authenticate…"
+}
+
+# Reap the background prefetch: 'wait' to consume its result (LEGACY needs it),
+# 'kill' to discard it (NATIVE probed on a legacy hostname — tarball not needed).
+reap_prefetch() {
+  [[ -n "$PREFETCH_PID" ]] || return 0
+  [[ "${1:-wait}" == "kill" ]] && kill "$PREFETCH_PID" 2>/dev/null
+  wait "$PREFETCH_PID" 2>/dev/null || true
+  PREFETCH_PID=""
+  rm -f "$TARBALL_LOCAL.partial" 2>/dev/null || true
+}
+
 main() {
   cat <<EOM
 $(c_bold '==========================================')
@@ -975,6 +1009,7 @@ EOM
   PLATFORM=LEGACY   # safe default until Phase 5.5 probes the remote host
 
   phase_preflight
+  prefetch_tarball_bg   # warm the tarball cache in the background during auth (LEGACY hint only)
   phase_keygen
   phase_known_host
   phase_copy_id
@@ -992,6 +1027,7 @@ EOM
   else
     phase_native_cleanup
   fi
+  reap_prefetch kill   # discard any unconsumed prefetch (e.g. legacy hostname that probed NATIVE)
 
   phase_configure_git
   phase_finish
