@@ -229,11 +229,15 @@ function Invoke-PhaseKnownHost {
 function Invoke-PhaseCopyId {
   Write-Heading "Phase 3 — Install public key on Amarel"
 
-  $sshArgs = @('-o','BatchMode=yes','-o','ConnectTimeout=5','-i',$SshKeyPath,'-o','IdentitiesOnly=yes',"$AmarelUser@$AmarelHost",'true')
-  & ssh @sshArgs 2>$null
-  if ($LASTEXITCODE -eq 0) {
-    Write-Info "Key-based login already works — skipping ssh-copy-id"
-    return
+  if (Test-Path "$SshKeyPath.pub") {
+    $pubkey = (Get-Content "$SshKeyPath.pub" -Raw).Trim()
+    $remoteCmd = "grep -qxF '$pubkey' ~/.ssh/authorized_keys"
+    $sshArgs = @('-o','BatchMode=yes','-o','ConnectTimeout=5','-i',$SshKeyPath,'-o','IdentitiesOnly=yes',"$AmarelUser@$AmarelHost", $remoteCmd)
+    & ssh @sshArgs 2>$null
+    if ($LASTEXITCODE -eq 0) {
+      Write-Info "Key-based login already works — skipping ssh-copy-id"
+      return
+    }
   }
 
   Write-Human "I'll now install your public key on Amarel. When prompted, type your Amarel password into the terminal. This is the ONLY time you'll need to type it. I cannot see what you type."
@@ -241,16 +245,17 @@ function Invoke-PhaseCopyId {
   if (-not (Confirm-User "Proceed?")) { Die "Aborted by user." }
 
   # Windows has no ssh-copy-id; equivalent one-liner:
-  $pubkey = Get-Content "$SshKeyPath.pub" -Raw
-  # Send the pubkey via stdin to ssh, which appends to authorized_keys on Amarel.
-  # Note: -tt forces TTY allocation so the Amarel password prompt is visible.
-  $remoteCmd = 'umask 077; mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys && ' +
-               'grep -qxF "$(cat)" ~/.ssh/authorized_keys || cat >> ~/.ssh/authorized_keys'
+  # We read the pubkey and embed it directly into the remote command string.
+  # This avoids piping stdin to ssh -tt, which hangs on PowerShell 5.1.
+  $pubkey = (Get-Content "$SshKeyPath.pub" -Raw).Trim()
+  $remoteCmd = "umask 077; mkdir -p ~/.ssh && chmod 700 ~/.ssh && " +
+               "touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && " +
+               "grep -qxF '$pubkey' ~/.ssh/authorized_keys || printf '%s\n' '$pubkey' >> ~/.ssh/authorized_keys"
 
-  $pubkey | & ssh -tt -o PreferredAuthentications=password -o PubkeyAuthentication=no "$AmarelUser@$AmarelHost" $remoteCmd
+  & ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no "$AmarelUser@$AmarelHost" $remoteCmd
 
   # Verify
-  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i $SshKeyPath -o IdentitiesOnly=yes "$AmarelUser@$AmarelHost" 'true' 2>$null
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i $SshKeyPath -o IdentitiesOnly=yes "$AmarelUser@$AmarelHost" "grep -qxF '$pubkey' ~/.ssh/authorized_keys" 2>$null
   if ($LASTEXITCODE -ne 0) {
     Die "Public key install appeared to succeed but key auth still fails. Inspect ~/.ssh/authorized_keys on Amarel."
   }

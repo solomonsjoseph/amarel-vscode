@@ -62,7 +62,7 @@ Code Remote-SSH for Amarel, or run the scripts directly:
 ```
 
 ```powershell
-pwsh scripts/setup.ps1
+powershell scripts/setup.ps1
 ```
 
 ## Common Search Terms

@@ -83,7 +83,7 @@ The tool auto-reads `AGENTS.md` / `GEMINI.md`. Ask:
 
 ```bash
 ./scripts/setup.sh          # macOS / Linux
-pwsh scripts/setup.ps1      # Windows
+powershell scripts/setup.ps1      # Windows
 ```
 
 The script is self-narrating and handles everything interactively.
@@ -149,7 +149,7 @@ the repo instructions.
 
 ## Can I use this without an LLM?
 
-Yes. Run `./scripts/setup.sh` on macOS/Linux or `pwsh scripts/setup.ps1` on
+Yes. Run `./scripts/setup.sh` on macOS/Linux or `powershell scripts/setup.ps1` on
 Windows. The scripts are self-narrating and handle the same setup flow
 interactively.
 
