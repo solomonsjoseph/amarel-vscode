@@ -252,7 +252,7 @@ function Invoke-PhaseCopyId {
                "touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && " +
                "grep -qxF '$pubkey' ~/.ssh/authorized_keys || printf '%s\n' '$pubkey' >> ~/.ssh/authorized_keys"
 
-  & ssh -tt -o PreferredAuthentications=password -o PubkeyAuthentication=no "$AmarelUser@$AmarelHost" $remoteCmd
+  & ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no "$AmarelUser@$AmarelHost" $remoteCmd
 
   # Verify
   & ssh -o BatchMode=yes -o ConnectTimeout=5 -i $SshKeyPath -o IdentitiesOnly=yes "$AmarelUser@$AmarelHost" "grep -qxF '$pubkey' ~/.ssh/authorized_keys" 2>$null

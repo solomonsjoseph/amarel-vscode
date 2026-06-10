@@ -613,7 +613,7 @@ bash ~/.cache/amarel-vscode/step-3.1.sh
 
 **Windows (no `ssh-copy-id`) — direct pubkey embedding pattern:**
 
-Windows lacks `ssh-copy-id`. To prevent hangs in Windows PowerShell 5.1 caused by piping stdin to `ssh -tt`, we read the public key content locally and embed it directly into the remote command string. The `-tt` PTY allocation is what makes the password prompt appear.
+Windows lacks `ssh-copy-id`. To prevent hangs in Windows PowerShell 5.1 caused by piping stdin to `ssh -tt`, we read the public key content locally and embed it directly into the remote command string. No `-tt` PTY is used — on Windows `ssh` reads the Amarel password straight from the console, so the prompt appears without it (this matches the fix proven on a real Windows 11 / PowerShell 5.1 machine).
 
 Stage the powershell key-install block to a `.ps1` first (run yourself):
 
@@ -625,7 +625,7 @@ $pubkey = (Get-Content "$HOME\.ssh\id_ed25519_amarel.pub" -Raw).Trim()
 $remoteCmd = "umask 077; mkdir -p ~/.ssh && chmod 700 ~/.ssh && " +
              "touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && " +
              "grep -qxF '$pubkey' ~/.ssh/authorized_keys || printf '%s\n' '$pubkey' >> ~/.ssh/authorized_keys"
-& ssh -tt -o PreferredAuthentications=password -o PubkeyAuthentication=no "<NetID>@amarel-new.hpc.rutgers.edu" $remoteCmd
+& ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no "<NetID>@amarel-new.hpc.rutgers.edu" $remoteCmd
 '@ | Set-Content -Path "$dir\step-3.1.ps1" -Encoding UTF8
 ```
 
