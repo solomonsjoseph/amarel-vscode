@@ -86,7 +86,7 @@ phase_preflight() {
     Darwin) os_name="macOS" ;;
     Linux)  os_name="Linux" ;;
     *)
-      die "Unsupported local OS: $(uname -s). On Windows, run: pwsh scripts/setup.ps1"
+      die "Unsupported local OS: $(uname -s). On Windows, run: powershell scripts/setup.ps1"
       ;;
   esac
   info "Local OS detected: $os_name"
@@ -240,11 +240,18 @@ phase_known_host() {
 phase_copy_id() {
   heading "Phase 3 — Install public key on Amarel"
 
-  # Already passwordless?
-  if ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$SSH_KEY_PATH" -o IdentitiesOnly=yes \
-       "${AMAREL_USER}@${AMAREL_HOST}" 'true' >/dev/null 2>&1; then
-    info "Key-based login already works — skipping ssh-copy-id"
-    return 0
+  # Already passwordless and key accepted?
+  # We read our public key locally and search for it in ~/.ssh/authorized_keys on Amarel.
+  # This avoids false positives where another key in ssh-agent authenticates successfully
+  # but our newly generated key is not yet installed on Amarel.
+  local pubkey
+  if [[ -f "${SSH_KEY_PATH}.pub" ]]; then
+    pubkey="$(cat "${SSH_KEY_PATH}.pub")"
+    if ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$SSH_KEY_PATH" -o IdentitiesOnly=yes \
+         "${AMAREL_USER}@${AMAREL_HOST}" "grep -qxF '$pubkey' ~/.ssh/authorized_keys" >/dev/null 2>&1; then
+      info "Key-based login already works — skipping ssh-copy-id"
+      return 0
+    fi
   fi
 
   human "ssh-copy-id will now run. When it prompts for ${AMAREL_USER}@${AMAREL_HOST}'s password, type your Amarel password into the terminal. This is the ONLY time you'll need to type it. I cannot see what you type."
@@ -313,11 +320,6 @@ ensure_ssh_config_entry() {
     use_keychain="  UseKeychain yes"
   fi
 
-  local control_path=""
-  control_path="  ControlMaster auto
-  ControlPath ~/.ssh/control-%r@%h:%p
-  ControlPersist 10m"
-
   cat >> "$SSH_CONFIG_PATH" <<EOF
 
 # Added by amarel-vscode skill on $(date +%F)
@@ -327,7 +329,6 @@ Host $AMAREL_HOST
   IdentitiesOnly yes
   AddKeysToAgent yes
 $use_keychain
-$control_path
 EOF
   info "~/.ssh/config entry added"
 }

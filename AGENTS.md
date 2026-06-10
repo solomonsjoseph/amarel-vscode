@@ -97,11 +97,11 @@ way). Source being "one line" does NOT prevent this — line *length* vs termina
 - TTY command > ~70 chars → first stage it to a wrapper script via `[EXEC]`
   (`~/.cache/amarel-vscode/step-<phase>.sh` with a `#!/usr/bin/env bash` shebang
   so it runs under bash regardless of the user's login shell; Windows:
-  `$env:LOCALAPPDATA\amarel-vscode\step-<phase>.ps1`), then hand the user only
-  the short launcher: `bash <path>` (macOS/Linux) or
-  `pwsh -ep Bypass -File "<path>"` (Windows; `-ep` is short for
+  `$env:LOCALAPPDATA\amarel-vscode\step-<phase>.ps1`), then hand the user only the
+  short launcher: `bash <path>` (macOS/Linux) or
+  `powershell -ep Bypass -File "<path>"` (Windows; `-ep` is short for
   `-ExecutionPolicy`). Quote the path.
-  Launch via the interpreter (`bash`/`pwsh -File`), never `./file`. Remove the
+  Launch via the interpreter (`bash`/`powershell -File`), never `./file`. Remove the
   staged file in the next `[EXEC]` verify. Today only Phase 3.1 exceeds the budget.
 
 **LLM operator rule — isolate the copy-paste payload.** The user must see at a
@@ -236,7 +236,7 @@ nc -z -w 5 amarel-new.hpc.rutgers.edu 22 && echo "✓ VPN: Amarel reachable" || 
 
 [EXEC]
 ```powershell
-if ($IsWindows) { "✓ OS: Windows" } else { "✗ OS: not Windows" }
+if ($IsWindows -or $env:OS -eq "Windows_NT") { "✓ OS: Windows" } else { "✗ OS: not Windows" }
 foreach ($c in 'ssh','scp','ssh-keygen','ssh-add','ssh-keyscan') {
   if (Get-Command $c -ErrorAction SilentlyContinue) { "✓ $c" } else { "✗ $c MISSING" }
 }
@@ -378,10 +378,16 @@ agent keys ssh offers).
 ```bash
 # Gate 1: key auth (stderr silenced — only the exit code routes SKIP/PROCEED;
 # a pre-setup "Permission denied"/"Host key verification failed" here is normal)
-ssh -o BatchMode=yes -o ConnectTimeout=5 \
-    -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes \
-    <NetID>@amarel-new.hpc.rutgers.edu true 2>/dev/null
-KEY_OK=$?
+# We check if the key is authorized on the remote host by searching authorized_keys.
+# This prevents false positives when a stale key exists in the agent but is not the local key.
+if [ -f ~/.ssh/id_ed25519_amarel.pub ]; then
+  ssh -o BatchMode=yes -o ConnectTimeout=5 \
+      -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes \
+      <NetID>@amarel-new.hpc.rutgers.edu "grep -qxF \"\$(cat)\" ~/.ssh/authorized_keys" < ~/.ssh/id_ed25519_amarel.pub 2>/dev/null
+  KEY_OK=$?
+else
+  KEY_OK=1
+fi
 
 # Gate 2: ssh_config block has all required keys
 CFG=$(ssh -G amarel-new.hpc.rutgers.edu 2>/dev/null)
@@ -401,10 +407,14 @@ fi
 
 [EXEC]
 ```powershell
-& ssh -o BatchMode=yes -o ConnectTimeout=5 `
-    -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes `
-    "<NetID>@amarel-new.hpc.rutgers.edu" true 2>&1 | Out-Null
-$keyOk = ($LASTEXITCODE -eq 0)
+$keyOk = $false
+if (Test-Path "$HOME\.ssh\id_ed25519_amarel.pub") {
+  $pubkey = (Get-Content "$HOME\.ssh\id_ed25519_amarel.pub" -Raw).Trim()
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 `
+      -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes `
+      "<NetID>@amarel-new.hpc.rutgers.edu" "grep -qxF '$pubkey' ~/.ssh/authorized_keys" 2>&1 | Out-Null
+  $keyOk = ($LASTEXITCODE -eq 0)
+}
 $cfg = & ssh -G amarel-new.hpc.rutgers.edu 2>$null
 $configOk = ($cfg -match 'identityfile.*id_ed25519_amarel') -and
             ($cfg -match 'identitiesonly yes') -and
@@ -570,7 +580,7 @@ so future logins use the key instead of a password.
 
 [EXEC]
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu true 2>/dev/null && echo "ALREADY WORKS — skip Phase 3" || echo "NEEDS key install"
+ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu "grep -qxF \"\$(cat)\" ~/.ssh/authorized_keys" < ~/.ssh/id_ed25519_amarel.pub 2>/dev/null && echo "ALREADY WORKS — skip Phase 3" || echo "NEEDS key install"
 ```
 
 If `ALREADY WORKS`, skip to Phase 4.
@@ -601,40 +611,28 @@ bash ~/.cache/amarel-vscode/step-3.1.sh
 > **Amarel password**. Type it once. This is the only time you will ever need it
 > for VS Code. **I cannot see what you type.**
 
-**Windows (no `ssh-copy-id`) — proven stdin-pipe pattern from `scripts/setup.ps1:213-220`:**
+**Windows (no `ssh-copy-id`) — direct pubkey embedding pattern:**
 
-The `-tt` flag forces a TTY so Amarel's password prompt is visible. The pub
-key is piped via stdin and read into a remote-side variable `KEY` with
-`KEY="$(cat)"` so the key contents never have to be escaped into a
-shell-quoted string. The `grep -qxF` guard prevents duplicate
-authorized_keys entries. (Do **not** use `grep -qxF "$(cat)"` inline — that
-would consume stdin into grep's argument and leave the append-cat empty.)
+Windows lacks `ssh-copy-id`. To prevent hangs in Windows PowerShell 5.1 caused by piping stdin to `ssh -tt`, we read the public key content locally and embed it directly into the remote command string. The `-tt` PTY allocation is what makes the password prompt appear.
 
-Stage the proven pipe-`pubkey`-into-`ssh -tt` block to a `.ps1` first (run
-yourself). The `-tt` PTY allocation is what makes the password prompt appear —
-it is preserved verbatim inside the wrapper:
+Stage the powershell key-install block to a `.ps1` first (run yourself):
 
 [EXEC]
 ```powershell
 $dir = "$env:LOCALAPPDATA\amarel-vscode"; New-Item -ItemType Directory -Force -Path $dir | Out-Null
 @'
-$remoteCmd = @"
-KEY="`$(cat)"
-umask 077
-mkdir -p ~/.ssh && chmod 700 ~/.ssh
-touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
-grep -qxF "`$KEY" ~/.ssh/authorized_keys || printf '%s\n' "`$KEY" >> ~/.ssh/authorized_keys
-"@
-Get-Content -Raw "$HOME\.ssh\id_ed25519_amarel.pub" | & ssh -tt -o PreferredAuthentications=password -o PubkeyAuthentication=no "<NetID>@amarel-new.hpc.rutgers.edu" $remoteCmd
+$pubkey = (Get-Content "$HOME\.ssh\id_ed25519_amarel.pub" -Raw).Trim()
+$remoteCmd = "umask 077; mkdir -p ~/.ssh && chmod 700 ~/.ssh && " +
+             "touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && " +
+             "grep -qxF '$pubkey' ~/.ssh/authorized_keys || printf '%s\n' '$pubkey' >> ~/.ssh/authorized_keys"
+& ssh -tt -o PreferredAuthentications=password -o PubkeyAuthentication=no "<NetID>@amarel-new.hpc.rutgers.edu" $remoteCmd
 '@ | Set-Content -Path "$dir\step-3.1.ps1" -Encoding UTF8
 ```
 
-Then hand the user only the short launcher (quote the path — `$HOME` may contain
-spaces):
 
 [TTY]
 ```powershell
-pwsh -ep Bypass -File "$env:LOCALAPPDATA\amarel-vscode\step-3.1.ps1"
+powershell -ep Bypass -File "$env:LOCALAPPDATA\amarel-vscode\step-3.1.ps1"
 ```
 
 > **🔒 YOUR TURN:** Amarel's password prompt will appear in the terminal.
@@ -857,7 +855,7 @@ foreach ($l in $lines) {
 **Decision logic:**
 
 - **If no `Host amarel-new.hpc.rutgers.edu` block exists** → append the canonical block below.
-- **If a block exists but is missing or has wrong values for `User`, `IdentityFile`, `IdentitiesOnly`, `AddKeysToAgent`, `ControlMaster`, or (macOS only) `UseKeychain`** → surface the diff to the user and ask them to edit the file manually (do not blindly overwrite — they may have custom `ProxyCommand`, `LocalForward`, etc.). Re-verify after user "done".
+- **If a block exists but is missing or has wrong values for `User`, `IdentityFile`, `IdentitiesOnly`, `AddKeysToAgent`, or (macOS only) `UseKeychain`** → surface the diff to the user and ask them to edit the file manually (do not blindly overwrite — they may have custom `ProxyCommand`, `LocalForward`, etc.). Re-verify after user "done".
 
 **Canonical block to append if absent:**
 
@@ -868,12 +866,9 @@ Host amarel-new.hpc.rutgers.edu
     IdentitiesOnly yes
     AddKeysToAgent yes
     UseKeychain yes
-    ControlMaster auto
-    ControlPath ~/.ssh/control-%r@%h:%p
-    ControlPersist 10m
 ```
 
-*macOS only:* include `UseKeychain yes`. Linux and Windows: omit it. `ControlMaster`/`ControlPath`/`ControlPersist` apply to all platforms — they multiplex VS Code's multiple SSH channels over one authenticated socket, eliminating repeated key negotiation.
+*macOS only:* include `UseKeychain yes`. Linux and Windows: omit it.
 
 **Append command (macOS/Linux):**
 
@@ -887,9 +882,6 @@ Host amarel-new.hpc.rutgers.edu
     IdentitiesOnly yes
     AddKeysToAgent yes
     UseKeychain yes
-    ControlMaster auto
-    ControlPath ~/.ssh/control-%r@%h:%p
-    ControlPersist 10m
 EOF
 chmod 600 ~/.ssh/config
 ```
@@ -901,7 +893,7 @@ chmod 600 ~/.ssh/config
 Follows the same parse → diff → ask logic as macOS/Linux above. If the
 `Host amarel-new.hpc.rutgers.edu` block is absent, append; if it is present with
 mismatching values, surface the diff and ask the user to edit manually.
-Note: `UseKeychain yes` is **macOS-only** and is OMITTED on Windows. `ControlMaster` is not supported on Windows OpenSSH — omit all three Control* lines on Windows.
+Note: `UseKeychain yes` is **macOS-only** and is OMITTED on Windows/Linux.
 
 [EXEC]
 ```powershell
@@ -925,16 +917,16 @@ manually, or run `Repair-AuthorizedKeyPermission`.
 
 [VERIFY]
 Command:  ssh -G amarel-new.hpc.rutgers.edu | grep -E …
-Pass:     all five lines present: user <NetID>, identityfile id_ed25519_amarel, identitiesonly yes, addkeystoagent yes, controlmaster auto
-Fail:     any of the five lines missing or wrong value
+Pass:     all four lines present: user <NetID>, identityfile id_ed25519_amarel, identitiesonly yes, addkeystoagent yes
+Fail:     any of the four lines missing or wrong value
 On fail:  re-edit ~/.ssh/config per decision logic above; re-verify
 Advance:  Phase 4.4 (macOS) or Phase 5 (Linux/Windows)
 ```bash
-ssh -G amarel-new.hpc.rutgers.edu | grep -E '^(user|identityfile|identitiesonly|addkeystoagent|controlmaster) '
+ssh -G amarel-new.hpc.rutgers.edu | grep -E '^(user|identityfile|identitiesonly|addkeystoagent) '
 ```
 
 Must show `user <NetID>`, `identityfile ~/.ssh/id_ed25519_amarel`,
-`identitiesonly yes`, `addkeystoagent yes`, `controlmaster auto`.
+`identitiesonly yes`, `addkeystoagent yes`.
 
 **Wait for verification to pass, then advance.**
 
@@ -2647,14 +2639,14 @@ Then hand the user (use the `full` form for the Phase 0.1 "fresh start" offer):
 
 [TTY]
 ```powershell
-pwsh -ep Bypass -File "$env:LOCALAPPDATA\amarel-vscode\reset.ps1" full
+powershell -ep Bypass -File "$env:LOCALAPPDATA\amarel-vscode\reset.ps1" full
 ```
 
 Config-only reset (keeps your key pair) — copy this instead:
 
 [TTY]
 ```powershell
-pwsh -ep Bypass -File "$env:LOCALAPPDATA\amarel-vscode\reset.ps1"
+powershell -ep Bypass -File "$env:LOCALAPPDATA\amarel-vscode\reset.ps1"
 ```
 
 After the reset, start again at Phase 0.
@@ -2666,7 +2658,7 @@ step-by-step, point them at:
 
 ```bash
 ./scripts/setup.sh        # macOS / Linux
-pwsh scripts/setup.ps1    # Windows
+powershell scripts/setup.ps1    # Windows
 ```
 
 The script does Phases 0–10 (plus the 9.5 git.path / Source Control step) in sequence with the same idempotency guarantees

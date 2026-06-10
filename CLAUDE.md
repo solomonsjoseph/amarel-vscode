@@ -25,7 +25,7 @@ If you edit one runbook file, keep the others in sync. The mirrors are:
 ```bash
 # End-user setup (idempotent; the script handles every interactive prompt itself)
 ./scripts/setup.sh                    # macOS / Linux
-pwsh scripts/setup.ps1                # Windows
+powershell scripts/setup.ps1          # Windows
 AMAREL_USER=netid ./scripts/setup.sh  # non-interactive username
 AMAREL_HOST=amarel.rutgers.edu ./scripts/setup.sh   # target the legacy CentOS 7 host (default: amarel-new.hpc.rutgers.edu)
 
@@ -81,10 +81,5 @@ The Phase 2 reference fingerprint is **host-aware** and **both hosts are now pin
 
 ## Known issues / future work
 
-These are low-priority bugs confirmed during the 2026-05-29 live run. The skill works end-to-end despite them — they affect edge cases in resume/fresh-start flows.
+No known open issues as of 2026-06-10. All previously tracked bugs (stale agent keys, reset order, and ControlMaster socket) have been resolved.
 
-1. **Phase 3.0 skip-probe false-positive** (tracked in GitHub issue #14): if stale Amarel keys remain in `ssh-agent` from a previous session but have not been installed on Amarel yet, the Phase 3.0 BatchMode probe succeeds (agent offers the key, server rejects it quietly), causing Phase 3 (`ssh-copy-id`) to be incorrectly skipped. Fix: tighten the probe to verify the key is actually accepted, not just attempted.
-
-2. **Fresh-start reset wipes `known_hosts` before the Amarel cleanup** (tracked in GitHub issue #15): the reset removes the Amarel `known_hosts` entry early in the wipe sequence, so the subsequent SSH-based Amarel-side cleanup (sysroot removal, `authorized_keys` scrub) cannot connect and is silently skipped. Fix: reorder the reset — run the remote cleanup first while the host entry still exists, then wipe `known_hosts`.
-
-3. **ControlMaster socket goes stale** (tracked in GitHub issue #16): `ControlMaster auto` + `ControlPersist 10m` in `~/.ssh/config` creates a shared socket that outlives the master SSH process after the persist window expires. VS Code then hangs with "Unable to resolve resource" when it tries to reuse the dead socket. Fix: add a troubleshooting entry, or remove `ControlMaster`/`ControlPersist` from the skill-written `ssh_config` block.
