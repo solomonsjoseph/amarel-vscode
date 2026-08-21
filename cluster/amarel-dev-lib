@@ -97,28 +97,41 @@ adl_valid_timespec() { printf '%s' "${1:-}" | grep -Eq '^([0-9]+-)?[0-9]{1,2}(:[
 # Time arithmetic
 # --------------------------------------------------------------------------
 
-# Seconds in a SLURM time spec: D-HH:MM:SS, HH:MM:SS, MM:SS, MM, or UNLIMITED.
-# UNLIMITED and unparseable specs return a number large enough to lose every
-# min() comparison, which is the safe direction: a bad read can only make the
-# request shorter, never longer.
+# Seconds in a SLURM time spec. UNLIMITED and anything unparseable return a
+# number large enough to lose every min() comparison, which is the safe
+# direction: a bad read can only make the request shorter, never longer.
+#
+# THE DASH CHANGES WHAT THE FIRST FIELD MEANS. SLURM accepts six forms and they
+# do not share one rule:
+#
+#   no dash:  MM        MM:SS        HH:MM:SS
+#   dash:     D-HH      D-HH:MM      D-HH:MM:SS
+#
+# So `1-12` is one day twelve HOURS while `12` is twelve MINUTES. Reading the
+# post-dash part with the dashless rule turns `1-12` into 1d 12m, a silent
+# 11.8-hour shortfall on a value a user is allowed to write in the conf file.
+# The prototype had this wrong in all three of its copies; this is the one
+# place it now lives.
 adl_tl_seconds() {
-	local s d hms
+	local s d hms dash
 	s="${1:-}"
 	case "$s" in
 	UNLIMITED | INFINITE | INVALID | NOT_SET | "") echo 999999999; return 0 ;;
 	esac
 	d=0
 	hms="$s"
+	dash=0
 	case "$s" in
 	*-*)
 		d="${s%%-*}"
 		hms="${s#*-}"
+		dash=1
 		;;
 	esac
-	echo "$hms" | awk -F: -v d="$d" '{
+	echo "$hms" | awk -F: -v d="$d" -v dash="$dash" '{
 		if (NF==3)      print d*86400 + $1*3600 + $2*60 + $3;
-		else if (NF==2) print d*86400 + $1*60 + $2;
-		else            print d*86400 + $1*60;
+		else if (NF==2) print d*86400 + (dash ? $1*3600 + $2*60 : $1*60 + $2);
+		else            print d*86400 + (dash ? $1*3600         : $1*60);
 	}'
 }
 
