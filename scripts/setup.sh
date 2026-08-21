@@ -965,20 +965,16 @@ phase_compute_session() {
   # working. Declining leaves a complete, usable login-node setup: no guard, no
   # ssh_config blocks, no cluster scripts, nothing to undo.
   say ""
-  human "Do you want your editor to run on a COMPUTE node?"
+  human "Do you want to use a compute node for your work, if you run heavy tasks?"
   say ""
-  say "  This books a small SLURM job and points an alias at it, so one click"
-  say "  lands you on a compute node instead of a shared login node."
+  say "  Heavy means builds, notebooks, training runs, language servers, or an"
+  say "  editor left open for hours. Rutgers OARC kills processes that load a"
+  say "  shared login node, and this is what keeps you off one."
   say ""
-  say "  Yes  if you run anything real on Amarel: builds, notebooks, training,"
-  say "       language servers, or an editor left open for hours. OARC kills"
-  say "       processes that load a login node, and this is what avoids that."
-  say "  No   if you mostly edit and browse files over SSH. Everything you have"
-  say "       set up already works. You can run this script again later and"
-  say "       say yes; nothing here is one-way."
+  say "  Saying yes automates the job scheduling, so one click books a compute"
+  say "  node and connects you to it."
   say ""
-  if ! confirm "Set up the compute-node session?"; then
-    info "Skipping the compute-node session. Your login-node setup is complete."
+  if ! confirm "Use a compute node for your work?"; then
     COMPUTE_SESSION_DECLINED=1
     return 0
   fi
@@ -1388,14 +1384,12 @@ EOM
   if [[ "${COMPUTE_SESSION_DECLINED:-0}" -eq 1 ]]; then
     cat <<EOM
 
-  $(c_green '✓ Setup complete.') Your editor will connect to a login node.
+  $(c_green '✓ You are all set.')
 
-  Keep the work light there: builds, training runs and long-lived language
-  servers are what Rutgers OARC asks people to keep off login nodes, and they
-  do kill processes that load one up.
+  If you ever want to use a compute node, with the job scheduling automated so
+  it happens on its own when you connect, come back and ask me. I will set it up.
 
-  Changed your mind, or your work got heavier? Re-run this script and say yes
-  to the compute-node question. Nothing you have set up is lost.
+  Just say: "set up the compute node for Amarel".
 
 EOM
   fi

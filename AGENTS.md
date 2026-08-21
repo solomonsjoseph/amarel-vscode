@@ -2506,23 +2506,30 @@ Run the skip probe in 13.0 first. If it says `SKIP`, the user already has this
 and you say nothing. Otherwise ask, in your own words, and wait for a real
 answer:
 
-> Do you want your editor to run on a compute node?
+> Do you want to use a compute node for your work, if you run heavy tasks?
 >
-> This books a small SLURM job and points an alias at it, so one click lands
-> you on a compute node instead of a shared login node.
+> Heavy means builds, notebooks, training runs, language servers, or an editor
+> left open for hours. OARC kills processes that load a shared login node, and
+> this is what keeps you off one.
 >
-> **Yes** if you run anything real on Amarel: builds, notebooks, training,
-> language servers, or an editor left open for hours. OARC kills processes that
-> load a login node, and this is what avoids that.
->
-> **No** if you mostly edit and browse files. Everything you have set up already
-> works, and you can come back and say yes any time.
+> Saying yes automates the job scheduling, so one click books a compute node and
+> connects you to it.
 
 **No means stop.** Do not install the guard, do not write the `ssh_config`
-blocks, do not copy the cluster scripts. Tell them their setup is finished, that
-the login node is fine for light work, and that they can ask for the compute
-session later. Then stop. Do not ask twice, do not argue, and do not warn them
-again.
+blocks, do not copy the cluster scripts. Say this and nothing more:
+
+> You are all set. If you ever want to use a compute node, with the job
+> scheduling automated so it happens on its own when you connect, come back and
+> ask me and I will set it up.
+
+Then stop. Do not ask twice, do not argue, do not list what they are missing,
+and do not warn them again. A no is a complete, correct setup, not a partial
+one.
+
+**When they do come back**, they will say something like "set up the compute
+node", "I want to use a compute node now", "automate the job scheduling", or
+"my work got heavier". Route straight to 13.0 and carry on from there. Do not
+re-run Phases 0 to 12: the skip probes will tell you what is already done.
 
 **Yes means continue to 13.1**, and finish by telling them to switch their
 editor target to `amarel-dev`, because the guard will refuse the login node from
