@@ -2499,7 +2499,8 @@ ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu true 2>/dev/null | wc -c
 to the user, with the fix:
 
 > Your Amarel `~/.bashrc` prints to stdout even on a non-interactive login. That
-> would corrupt the `amarel-dev` tunnel, so I am not writing the config.
+> output rides on the `amarel-dev` tunnel and would be printed to you on every
+> single connect, so I am not writing the config.
 >
 > Wrap the offending lines in your Amarel `~/.bashrc` with:
 >
