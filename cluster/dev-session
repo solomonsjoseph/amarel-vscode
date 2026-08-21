@@ -102,7 +102,20 @@ cmd_ensure() {
 }
 
 cmd_status() {
-	local job fields elapsed cpus left node state wins m
+	local job fields elapsed cpus left node state wins m lf lft lfm
+
+	# The last failed connect, first, because it is the reason the user is
+	# looking. The stderr line from a failing ProxyCommand is usually swallowed
+	# by ControlPersist, so this file is how the reason reaches anyone. See the
+	# header of amarel-dev-connect.
+	lf="$ADL_LOG_DIR/last-failure"
+	if [ -r "$lf" ]; then
+		IFS=$'\t' read -r lft lfm <"$lf"
+		say "last failed connect: $lft"
+		say "  $lfm"
+		say "  ask the skill to look into it, or see $ADL_LOG_DIR/connect.log"
+		say ""
+	fi
 
 	job=$(adl_job_running)
 	[ -n "$job" ] || job=$(adl_job_any)

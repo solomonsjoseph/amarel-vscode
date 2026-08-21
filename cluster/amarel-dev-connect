@@ -63,20 +63,40 @@ fi
 adl_load_conf
 
 LOGFILE="$ADL_LOG_DIR/connect.log"
+LASTFAIL="$ADL_LOG_DIR/last-failure"
 
-# Progress goes to the log. The user sees ONE line, and only on failure.
+# Progress goes to the log. On failure we emit ONE line on stderr and also
+# record it to $LASTFAIL.
 #
-# WHY EXACTLY ONE LINE. A failure popup always appears, but whether our text
-# rides inside it is unconfirmed and cannot be tested until a maintenance
-# window opens on 2026-09-15. The Output panel truncates and a notification may
-# show only the last line, so one line makes first and last the same line and
-# it stops mattering which the client reads.
+# THE STDERR LINE OFTEN DOES NOT REACH THE USER, AND THAT IS NOT A BUG WE CAN
+# FIX HERE. Measured 2026-08-21: with `ControlPersist` set on Host amarel-dev,
+# which is what ships, OpenSSH detaches the master and sends its standard file
+# descriptors to /dev/null, so a failing ProxyCommand's stderr is discarded.
+# From ssh.c, control_persist_detach():
+#     if (stdfd_devnull(1, 1, !(log_is_on_stderr() && debug_flag)) == -1)
+# stderr survives only when debug_flag is set, i.e. `ssh -v`. Verified both
+# ways: a plain connect shows only "Connection closed by UNKNOWN port 65535",
+# and `ssh -v amarel-dev` shows the real line. stdout is not an alternative,
+# ssh discards pre-banner output from a failing ProxyCommand.
+#
+# Dropping ControlPersist would restore the line, but it also makes the first
+# window own the master: closing it then kills every other window. Measured the
+# same day. Keeping windows independent is worth more than the message.
+#
+# $LASTFAIL is therefore the channel that actually works. `dev-session status`
+# prints it, and the skill's Phase 13.10 reads it to diagnose a failed connect.
+# Keep the stderr line anyway: it is what a CLI user and `ssh -v` see.
 note() {
 	mkdir -p "$ADL_LOG_DIR" 2>/dev/null
 	printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >>"$LOGFILE" 2>/dev/null
 }
 fail() {
 	note "FAILED: $*"
+	# Written before the stderr line, because the stderr line is the half that
+	# usually gets discarded. Single line, timestamped, overwritten each time:
+	# the skill wants the CURRENT failure, and connect.log keeps the history.
+	mkdir -p "$ADL_LOG_DIR" 2>/dev/null
+	printf '%s\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >"$LASTFAIL" 2>/dev/null
 	printf 'amarel-dev: %s Details: bin/dev-session status\n' "$*" >&2
 	exit 1
 }
@@ -243,6 +263,11 @@ if [ -z "$node" ]; then
 fi
 
 note "connecting to $node"
+
+# A connect got through, so any recorded failure is history. Without this
+# `dev-session status` would report a stale failure forever and the skill would
+# diagnose a problem that is already gone.
+rm -f "$LASTFAIL" 2>/dev/null
 
 # `-i 120s`, never a bare `nc`.
 #

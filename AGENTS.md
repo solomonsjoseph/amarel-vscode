@@ -400,7 +400,8 @@ it is what catches a session sitting idle for twenty hours.
 If `dev-session` is not installed on the cluster, this user has not run Phase 13.
 Offer Phase 13 instead of the menu.
 
-The commands and the two `stop` guards are in **Phase 13.9**.
+The commands and the two `stop` guards are in **Phase 13.9**. If they are
+reporting a failure rather than managing a session, go to **Phase 13.10**.
 
 ---
 
@@ -1929,8 +1930,9 @@ already open (otherwise no action needed).
 
 - `expected GLIBC >= v2.28.0` → Phase 8 didn't take. Re-run 8.2; fix `~/.bashrc` if env var empty (8.3).
 - `signature verification failed with UnknownError` on "Install in SSH" → run **Phase 9**. If Phase 9 reports `TOOL=NONE`, have the user add `module load python` to `~/.bashrc` (above any non-interactive `return`) so python3 reaches non-interactive shells, then re-trigger Phase 9.
-- The connect fails with `amarel-dev: …` on one line → that is Phase 13's own
-  diagnostic. Read it, then see **Phase 13 → Common failures**.
+- The connect fails with `Connection closed by UNKNOWN port 65535` → that is a
+  Phase 13 failure with its message suppressed by `ControlPersist`. Do not ask
+  the user to read it. Go to **Phase 13.10**, which gathers the evidence itself.
 - The status bar goes green but `hostname` says `amarel3` / `amarel4` → the user
   picked a login-node entry. Have them reconnect to **`amarel-dev`**.
 - `Could not find pty 4 on pty host` → harmless cosmetic noise (seen in canonical manual run). Ignore.
@@ -2752,7 +2754,119 @@ attached or running and says go ahead anyway.
 `stop`, and nothing else. A rolling allocation is the behaviour OARC objected
 to, relocated, so do not add one.
 
+### 13.10 — "It failed." Diagnose, fix, then file the report
+
+This is the lane for a user who says any of:
+
+```
+amarel-dev failed        it won't connect        my editor can't reach amarel
+find out why it failed   fix my connection       the remote window won't open
+```
+
+**Assume they cannot tell you why.** The editor popup says
+`Connection closed by UNKNOWN port 65535` and nothing more, because OpenSSH
+sends a detached master's stderr to `/dev/null` when `ControlPersist` is set.
+That is expected. **Do not ask the user to read an error message.** Gather the
+evidence yourself.
+
+#### Step 1, gather evidence. All read-only, run every one.
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes amarel-jump bin/dev-session status 2>/dev/null
+ssh -o BatchMode=yes amarel-jump 'cat ~/.amarel-dev-logs/last-failure 2>/dev/null; echo "---"; tail -30 ~/.amarel-dev-logs/connect.log 2>/dev/null'
+ssh -o BatchMode=yes amarel-jump 'bin/amarel-dev-connect --selftest' 2>&1
+ssh -o BatchMode=yes amarel-jump 'squeue -h -u $USER -o "%i %j %T %N %l %L %R"' 2>/dev/null
+ssh -o BatchMode=yes amarel-jump true 2>/dev/null | wc -c
+```
+
+If even `amarel-jump` fails, the problem is upstream of Phase 13: VPN, key auth
+or the login node. Route to Phase 0 and stop here.
+
+`ssh -v amarel-dev true` also reveals the suppressed line, because `debug_flag`
+keeps stderr attached. Use it when the evidence above is inconclusive.
+
+#### Step 2, match the cause and apply the fix
+
+| Evidence | Cause | Fix |
+|---|---|---|
+| `maintenance: window ... is OPEN` | A maintenance reservation. **Correct behaviour, not a fault.** | Tell the user when it ends. **Apply no fix and file no issue.** |
+| `job NNNN is queued (Resources\|Priority)` | Ordinary queue wait | Offer a shorter `AMAREL_DEV_WALLTIME`, which fits gaps a 3 day job cannot. Re-run `dev-session ensure`. |
+| `(ReqNodeNotAvail, Reserved for maintenance)` | Job outlives the next window | `amarel-dev-connect` trims it automatically. If it did not, the window is closer than the one hour floor: wait. |
+| `invalid partition specified` | Partition gone, renamed, or access lost | Re-run the Phase 13.2 detection and rewrite `AMAREL_DEV_PARTITION`. |
+| selftest `MISSING:` a SLURM tool or GNU `date -d` | Login node changed, or `PATH` broke | Report it. Do not paper over it. |
+| selftest `conf: ... MISSING` | Conf deleted | Re-run 13.2 and 13.3, then rewrite it. |
+| `No such file or directory` on the ProxyCommand | Cluster scripts gone | Re-run 13.4. |
+| The `wc -c` probe is non-zero | A chatty `~/.bashrc` | Apply the 13.1 fix. |
+| Connect hangs then dies near 300s | Provisioning exceeded the editor's ceiling | Check the queue. A shorter walltime usually starts sooner. |
+| Status healthy, connect still fails | Often a stale control socket | `ssh -O exit amarel-dev`, then retry. |
+
+Apply the fix yourself where the table says so. **Never** disable the
+login-node guard, widen the stdout gate, or add a retry loop to work around a
+failure. Those are the constraints the design rests on.
+
+#### Step 3, verify the fix
+
+[VERIFY]
+```bash
+ssh -o BatchMode=yes -o ConnectTimeout=300 amarel-dev hostname -s
+```
+
+A compute node name is a pass. `amarel3` or `amarel4` is a failure. Do not tell
+the user it is fixed until this returns a compute node.
+
+#### Step 4, file the report
+
+**Only when you actually applied a fix and step 3 passed.** A maintenance
+window is not a defect, and neither is an ordinary queue wait that cleared on
+its own. Filing those trains the repo to ignore its own issues.
+
+Check for a duplicate first, and never file a second issue for a cause already
+recorded:
+
+[EXEC]
+```bash
+gh issue list --repo solomonsjoseph/amarel-vscode --state all --search "phase-13 in:title" --limit 20
+```
+
+**Redact before writing anything.** Replace the NetID with `<NetID>` and home
+paths with `~`. Never include private key material, tokens, `~/.ssh/config`
+contents beyond the amarel stanzas, or the output of any keychain query. The
+repo is public; treat everything you paste as permanent.
+
+The repo owner is `solomonsjoseph`, so this is the **work** GitHub account.
+Confirm the identity before filing, and show the user the output:
+
+[EXEC]
+```bash
+gh auth status
+```
+
+File it, with the body carrying everything a maintainer needs to fix it
+properly rather than re-diagnose it:
+
+[EXEC]
+```bash
+gh issue create --repo solomonsjoseph/amarel-vscode \
+  --title "phase-13: <one line symptom>" \
+  --body-file <path to the drafted report>
+```
+
+The body must contain, in this order: what the user reported; the evidence from
+step 1 verbatim and redacted; the cause you concluded and how the evidence
+supports it; the fix applied; the step 3 verification output; and whether the
+fix was a workaround or a real repair. Say plainly if you are unsure of the
+cause. A guess recorded as fact is worse than an open question.
+
+Finally, tell the user what broke, what you did, and give them the issue link.
+
 ### Common failures
+
+**You will usually not see these lines.** They go to the ProxyCommand's stderr,
+which OpenSSH discards when `ControlPersist` is set, so the editor shows only
+`Connection closed by UNKNOWN port 65535`. They are recorded to
+`~/.amarel-dev-logs/last-failure` instead, `dev-session status` prints that, and
+`ssh -v amarel-dev` reveals the live line. See **13.10**.
 
 - `amarel-dev: maintenance until <time>, cannot schedule.` The cluster is in a
   maintenance reservation. This is the one legitimate refusal. Nothing to fix,
@@ -2820,6 +2934,25 @@ an aspiration:**
   one.
 - `dev-session stop --force` exists, but only pass it after telling the user what
   is attached or running and getting a yes.
+
+**Phase 13.10 files a public GitHub issue, so it carries its own rules:**
+
+- **Redact before writing.** NetID becomes `<NetID>`, home paths become `~`.
+  Never paste private key material, a token, `gh` credentials, the contents of
+  `~/.ssh/config` beyond the amarel stanzas, or the output of any keychain
+  query. The repo is public and an issue is permanent.
+- **File only after a fix was applied and verified.** An open maintenance
+  window is correct behaviour, and so is an ordinary queue wait that cleared on
+  its own. Filing those teaches the repo to ignore its own issues.
+- **Check for a duplicate first** and add to the existing issue instead of
+  opening a second one for a cause already recorded.
+- The repo owner is `solomonsjoseph`, so this is the **work** GitHub account.
+  Confirm with `gh auth status` and show the user the output before filing.
+- **Never** disable the login-node guard, widen the stdout gate, or add a retry
+  loop to make a failure go away. Report the failure instead. Those three are
+  the constraints the whole design rests on.
+- Say plainly when you are unsure of the cause. A guess recorded as fact is
+  worse than an open question.
 
 If the user reports their password was leaked or something looks suspicious,
 stop and tell them to rotate their Amarel password via Rutgers OARC.

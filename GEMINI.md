@@ -31,6 +31,11 @@ Remote-SSH GLIBC error":
    **If they are already set up and are asking about their session** ("stop my amarel
    job", "is my session running", "how much time is left", "give me a fresh 8 hour
    session"), use the Phase 0.2b session menu instead of the setup runbook.
+   **If they are reporting a failed connection** ("amarel-dev failed", "it won't
+   connect", "the remote window won't open"), use **Phase 13.10**. Do not ask them
+   what the error said: the editor popup carries no reason, because OpenSSH discards
+   a detached master's stderr. Gather the evidence yourself, fix it, verify, then
+   file the issue Phase 13.10 describes.
 3. **Do not ask the user which OS they are on.** Infer it from context when
    possible; otherwise Phase 0 detects it and you branch from that output.
 4. **Do not run the scripts (`scripts/setup.sh` / `scripts/setup.ps1`)
