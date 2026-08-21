@@ -925,11 +925,340 @@ REMOTE
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Phase 9.6 — Compute-node dev session
+# Surfaced as "Phase 13" in the guided runbooks (SKILL.md / AGENTS.md).
+#
+# Installs the cluster-side scripts that let the user open a Remote Window on
+# `amarel-dev` and land on a COMPUTE node instead of a login node. OARC kills
+# editor servers on login nodes, and the editor is not a thin client: its
+# extension host alone ran 145 threads on amarel3.
+#
+# ORDER INSIDE THIS PHASE IS LOAD-BEARING. The cluster scripts are installed and
+# self-tested FIRST; the ssh_config blocks are written LAST, only after
+# `amarel-dev-connect --selftest` passes. Otherwise a failure mid-phase leaves a
+# working-looking alias whose first click dies with "No such file or directory".
+#
+# Idempotent. Non-fatal: a failure here leaves the login-node setup intact.
+# ─────────────────────────────────────────────────────────────────────────────
+
+phase_compute_session() {
+  heading "Phase 9.6 — Compute-node dev session (amarel-dev)"
+
+  local rc=0
+
+  # ── Skip probe ─────────────────────────────────────────────────────────────
+  if grep -q "^Host amarel-jump$" "$SSH_CONFIG_PATH" 2>/dev/null &&
+     grep -q "^Host amarel-dev$"  "$SSH_CONFIG_PATH" 2>/dev/null &&
+     ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" \
+         'bin/amarel-dev-connect --selftest' >/dev/null 2>&1; then
+    info "amarel-dev already set up and self-testing clean"
+    COMPUTE_SESSION_READY=1
+    return 0
+  fi
+
+  # ── Hard gate: the remote shell must be silent on stdout ───────────────────
+  # Every byte a chatty ~/.bashrc writes to stdout is fed into the SSH byte
+  # stream and corrupts the ProxyCommand handshake. This is a refusal, not a
+  # warning: a config written over a dirty shell produces a tunnel that fails
+  # in a way nobody can read.
+  # `|| true` on every probe in this phase: setup.sh runs under `set -e`, and a
+  # failed assignment or a short-circuited && would abort the whole script.
+  local noise=""
+  noise="$(ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" true 2>/dev/null || true)"
+  if [[ -n "$noise" ]]; then
+    err "Your Amarel shell prints to stdout on a plain 'ssh <host> true':"
+    printf '%s\n' "$noise" | sed 's/^/      /'
+    err "That output would corrupt the amarel-dev tunnel, so Phase 9.6 is stopping here."
+    say "  Fix: wrap the offending lines in your Amarel ~/.bashrc with"
+    say "       case \$- in *i*) ;; *) return ;; esac"
+    say "  then re-run this script."
+    return 0
+  fi
+
+  # ── Ask, only when there is no conf yet ────────────────────────────────────
+  # An existing ~/.amarel-dev.conf is the user's and is preserved, which is also
+  # what keeps a re-run quiet.
+  local have_conf=0
+  if ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" \
+         'test -f ~/.amarel-dev.conf' >/dev/null 2>&1; then
+    have_conf=1
+  fi
+
+  local partition="" walltime="3-00:00:00"
+  if [[ $have_conf -eq 1 ]]; then
+    info "Keeping your existing ~/.amarel-dev.conf"
+  else
+    # Partition access is DETECTED, never assumed. `sbatch --test-only` predicts
+    # a start time and a node without submitting anything.
+    say "  Checking which partitions you can submit to…"
+    local probe
+    probe="$(ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" 'bash -se' <<'REMOTE' 2>/dev/null || true
+set -uo pipefail
+for p in $(sinfo -h -o '%R' | sort -u); do
+  out=$(sbatch --test-only -p "$p" -c 4 --mem=16G --time=1-00:00:00 \
+        --job-name=amarel-dev-probe --wrap true 2>&1) || continue
+  case "$out" in *"to start at"*) ;; *) continue ;; esac
+  t=$(printf '%s' "$out" | sed -e 's/.*to start at //' -e 's/ .*//')
+  e=$(date -d "$t" +%s 2>/dev/null) || continue
+  case "$p" in p_*) lab=lab ;; *) lab=general ;; esac
+  printf '%s %s %s\n' "$p" "$e" "$lab"
+done | sort -k2,2n
+REMOTE
+)"
+    local lab_part general_part
+    lab_part="$(printf '%s\n' "$probe"     | awk '$3=="lab"     {print $1; exit}')"
+    general_part="$(printf '%s\n' "$probe" | awk '$3=="general" {print $1; exit}')"
+
+    if [[ -n "$lab_part" ]]; then
+      info "You have access to the lab partition: $lab_part"
+      if confirm "Use $lab_part for your dev sessions?"; then
+        partition="$lab_part"
+      fi
+    fi
+    if [[ -z "$partition" ]]; then
+      partition="$general_part"
+      [[ -n "$partition" ]] && info "Using $partition, the general partition that would start soonest" || true
+    fi
+    if [[ -z "$partition" ]]; then
+      warn "No partition accepted a test submission. Skipping Phase 9.6."
+      warn "Check 'sinfo' and your account associations, then re-run this script."
+      return 0
+    fi
+
+    # Session length. The job holds its cores for the whole walltime whether or
+    # not anyone is typing, and nothing releases it early except `dev-session
+    # stop`, so this default is the only waste control there is.
+    human "How long should your dev sessions be?"
+    say ""
+    say "    4h   a focused block. Starts fastest: short jobs fit into gaps a"
+    say "         3 day job cannot."
+    say "    1d   a working day."
+    say "    3d   the maximum on general partitions."
+    say ""
+    say "    A session ends at its walltime or when you run 'dev-session stop'."
+    say "    Nothing renews it, and nothing warns you before it ends."
+    say ""
+    local answer=""
+    read -r -p "$(c_yellow '  ?') Session length [4h/1d/3d, default 3d]: " answer </dev/tty
+    case "${answer:-3d}" in
+      4h|4H) walltime="0-04:00:00" ;;
+      1d|1D) walltime="1-00:00:00" ;;
+      *)     walltime="3-00:00:00" ;;
+    esac
+    info "Sessions will request $walltime on $partition"
+  fi
+
+  # ── Install the cluster side ───────────────────────────────────────────────
+  local cluster_dir="${SKILL_DIR}/cluster"
+  for f in amarel-dev-lib dev-session amarel-dev-connect bash_profile_block.sh; do
+    [[ -f "$cluster_dir/$f" ]] || { warn "Missing $cluster_dir/$f, skipping Phase 9.6."; return 0; }
+  done
+
+  ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" 'mkdir -p ~/bin' || {
+    warn "Could not create ~/bin on Amarel (non-fatal)."; return 0; }
+
+  scp -q "$cluster_dir/amarel-dev-lib" "$cluster_dir/dev-session" \
+         "$cluster_dir/amarel-dev-connect" \
+         "${AMAREL_USER}@${AMAREL_HOST}:bin/" || {
+    warn "Could not copy the cluster scripts (non-fatal)."; return 0; }
+  info "Installed ~/bin/{amarel-dev-lib,dev-session,amarel-dev-connect}"
+
+  # scp does not carry the executable bit from a repo checkout reliably, so set
+  # it explicitly rather than trusting the source file's mode.
+  ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" \
+      'chmod 755 ~/bin/dev-session ~/bin/amarel-dev-connect; chmod 644 ~/bin/amarel-dev-lib' || true
+
+  if [[ $have_conf -eq 0 ]]; then
+    # Unquoted delimiter on purpose: $partition and $walltime must expand HERE,
+    # while \$HOME is escaped so it expands on the CLUSTER.
+    # shellcheck disable=SC2087
+    ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" 'bash -se' <<REMOTE || rc=$?
+set -uo pipefail
+cat > "\$HOME/.amarel-dev.conf" <<CONF
+# ~/.amarel-dev.conf, written by the amarel-vscode setup, Phase 13.
+# Safe to edit. Parsed as KEY=VALUE, never sourced as shell.
+AMAREL_DEV_PARTITION=${partition}
+AMAREL_DEV_CPUS=4
+AMAREL_DEV_MEM=16G
+AMAREL_DEV_WALLTIME=${walltime}
+AMAREL_DEV_LOG_DIR=\$HOME/.amarel-dev-logs
+CONF
+chmod 600 "\$HOME/.amarel-dev.conf"
+REMOTE
+    if [[ $rc -eq 0 ]]; then info "Wrote ~/.amarel-dev.conf"; else warn "Could not write ~/.amarel-dev.conf"; fi
+  fi
+
+  # The login-node guard. Appended once, between markers so a reset can strip it.
+  if ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" \
+        'grep -q "^# >>> amarel-vscode phase 13 >>>$" ~/.bash_profile 2>/dev/null'; then
+    info "~/.bash_profile already has the login-node guard"
+  else
+    if ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" \
+           'cat >> ~/.bash_profile' < "$cluster_dir/bash_profile_block.sh"; then
+      info "Appended the login-node guard to ~/.bash_profile"
+    else
+      warn "Could not append the login-node guard (non-fatal)."
+    fi
+  fi
+
+  # ── Selftest gate. Nothing local is written until this passes. ─────────────
+  if ! ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" \
+          'bin/amarel-dev-connect --selftest'; then
+    warn "The cluster-side selftest did not pass, so no ssh_config changes were made."
+    warn "Fix what it reported above, then re-run this script."
+    return 0
+  fi
+  info "Cluster-side selftest passed"
+
+  # ── Local side: two ssh_config blocks, jump first ──────────────────────────
+  ensure_ssh_jump_entry
+  ensure_ssh_dev_entry
+
+  if ssh -G amarel-dev 2>/dev/null | grep -q '^proxycommand ssh -q amarel-jump bin/amarel-dev-connect$'; then
+    info "~/.ssh/config resolves amarel-dev through the cluster-side connect script"
+    COMPUTE_SESSION_READY=1
+  else
+    warn "amarel-dev did not resolve as expected; check ~/.ssh/config by hand."
+  fi
+}
+
+# The ssh_config work canNOT go inside ensure_ssh_config_entry(): that function
+# returns early whenever the "Host <FQDN>" block is present, which is true for
+# every existing user, so anything appended below its guard would never be
+# written. These are siblings with their own guards.
+#
+# Jump before dev: OpenSSH takes the FIRST matching value per keyword, and the
+# dev block's ProxyCommand hops through the jump host.
+
+ensure_ssh_jump_entry() {
+  mkdir -p "$(dirname "$SSH_CONFIG_PATH")" "${HOME}/.ssh/cm"
+  touch "$SSH_CONFIG_PATH"
+  chmod 600 "$SSH_CONFIG_PATH"
+
+  if grep -q "^Host amarel-jump$" "$SSH_CONFIG_PATH"; then
+    info "~/.ssh/config already has Host amarel-jump"
+    return 0
+  fi
+
+  local use_keychain=""
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    use_keychain="  UseKeychain yes"
+  fi
+
+  cat >> "$SSH_CONFIG_PATH" <<EOF
+
+# Added by amarel-vscode Phase 13 on $(date +%F)
+# Plumbing only. This is what the amarel-dev ProxyCommand hops through to reach
+# the cluster. DO NOT POINT YOUR EDITOR AT THIS ENTRY: it is a login node, and
+# connecting an editor here is the exact behaviour OARC objected to. The
+# cluster's ~/.bash_profile guard refuses an editor bootstrap here anyway, but
+# do not rely on that as the only defence.
+#
+# No ControlMaster here, deliberately. Measured 2026-08-07: the jump hop was a
+# flat 1.0s all afternoon while the compute leg swung 4-233s, so multiplexing it
+# would serialize a leg that is already fast and parallel.
+Host amarel-jump
+  HostName $AMAREL_HOST
+  User $AMAREL_USER
+  IdentityFile $SSH_KEY_PATH
+  IdentitiesOnly yes
+  AddKeysToAgent yes
+$use_keychain
+  ServerAliveInterval 60
+EOF
+  info "~/.ssh/config: added Host amarel-jump"
+}
+
+ensure_ssh_dev_entry() {
+  if grep -q "^Host amarel-dev$" "$SSH_CONFIG_PATH"; then
+    info "~/.ssh/config already has Host amarel-dev"
+    return 0
+  fi
+
+  cat >> "$SSH_CONFIG_PATH" <<EOF
+
+# Added by amarel-vscode Phase 13 on $(date +%F)
+# The ONLY host your editor should target. The ProxyCommand runs on the CLUSTER
+# and resolves the current allocation's compute node at connect time, so this
+# keeps working when the job moves. It also provisions one when none is running,
+# which is why a first click works with no setup step of its own.
+#
+# KEEPALIVE IS TUNED FOR THE STALE-MASTER CASE. Do not raise it back to 60/10 to
+# "reduce chatter". When an allocation ends, the compute node's sshd dies but no
+# TCP reset reaches the laptop, because the connection runs through the login
+# node. The master is left holding a half-open socket and 'ssh -O check' still
+# says "Master running", wrongly. Measured 2026-08-20 by cancelling a job under
+# a live master:
+#     no ServerAlive   a connect attempt HUNG with no output (killed at 20s)
+#     60 x 10          master cleared at ~105-120s
+#     15 x 3 (this)    master cleared at 15-30s, socket removed cleanly
+# The editor's ceiling is 300s, so 15x3 clears well inside it and the next click
+# is a normal cold connect. Manual reset: ssh -O exit amarel-dev
+#
+# ServerAliveInterval 15 IS COUPLED TO 'nc -i 120s' in amarel-dev-connect on the
+# cluster. The 120s idle timeout only survives because this side sends a
+# keepalive every 15s. Change one and you must change the other.
+Host amarel-dev
+  User $AMAREL_USER
+  IdentityFile $SSH_KEY_PATH
+  IdentitiesOnly yes
+  ProxyCommand ssh -q amarel-jump bin/amarel-dev-connect
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ServerAliveInterval 15
+  ServerAliveCountMax 3
+  ControlMaster auto
+  ControlPath ~/.ssh/cm/%C
+  ControlPersist 30m
+EOF
+  info "~/.ssh/config: added Host amarel-dev"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Phase 10 — Final instructions (VS Code GUI is human-only)
 # ─────────────────────────────────────────────────────────────────────────────
 
 phase_finish() {
   heading "Phase 10 — Open VS Code"
+
+  # Once Phase 9.6 has installed amarel-dev, pointing the user at the login-node
+  # host would undo the whole point of it: OARC kills editor servers there, and
+  # the cluster's own ~/.bash_profile guard now refuses that connection anyway.
+  # So the instruction names amarel-dev instead, and says what the other entry
+  # is for.
+  if [[ "${COMPUTE_SESSION_READY:-0}" -eq 1 ]]; then
+    cat <<EOM
+
+  $(c_green '✓ Server-side setup complete.')
+
+  $(c_bold 'YOUR TURN — finish in VS Code:')
+
+    1. Open VS Code
+    2. Cmd+Shift+P (Mac) / Ctrl+Shift+P (Win/Linux)
+    3. Type: $(c_bold 'Remote-SSH: Connect to Host')
+    4. Pick: $(c_bold 'amarel-dev')
+
+  That lands you on a COMPUTE node. If no job is running, one is submitted for
+  you and the connection waits for it, which takes a few seconds.
+
+  The other two entries are plumbing, not editor targets:
+    ${AMAREL_HOST}   a login node. Your Amarel ~/.bash_profile now
+      refuses an editor server here, because that is what OARC objected to.
+    amarel-jump   what amarel-dev hops through to reach the cluster.
+
+  Your session holds its cores until its walltime runs out. Nothing renews it
+  and nothing warns you before it ends. To see or release it:
+
+    ssh amarel-jump bin/dev-session status
+    ssh amarel-jump bin/dev-session stop
+
+  A click refuses during an Amarel maintenance window. That is expected; the
+  message names the dates.
+
+EOM
+    return 0
+  fi
+
   cat <<EOM
 
   $(c_green '✓ Server-side setup complete.')
@@ -1008,6 +1337,7 @@ $(c_bold '==========================================')
 EOM
 
   PLATFORM=LEGACY   # safe default until Phase 5.5 probes the remote host
+  COMPUTE_SESSION_READY=0   # set by Phase 9.6 when amarel-dev is usable
 
   phase_preflight
   prefetch_tarball_bg   # warm the tarball cache in the background during auth (LEGACY hint only)
@@ -1031,6 +1361,7 @@ EOM
   reap_prefetch kill   # discard any unconsumed prefetch (e.g. legacy hostname that probed NATIVE)
 
   phase_configure_git
+  phase_compute_session
   phase_finish
 }
 
