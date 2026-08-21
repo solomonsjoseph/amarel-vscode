@@ -1019,15 +1019,29 @@ for p in $(sinfo -h -o '%R' | sort -u); do
   case "$out" in *"to start at"*) ;; *) continue ;; esac
   t=$(printf '%s' "$out" | sed -e 's/.*to start at //' -e 's/ .*//')
   e=$(date -d "$t" +%s 2>/dev/null) || continue
+  d=$(scontrol show partition "$p" 2>/dev/null | tr ' ' '\n')
+  tier=$(printf '%s' "$d" | awk -F= '/^PriorityTier=/{print $2; exit}')
+  ovs=$(printf '%s' "$d" | awk -F= '/^OverSubscribe=/{print $2; exit}')
+  # OverSubscribe=FORCE:n shares each CPU n ways. Fine for a short GUI job,
+  # wrong for an editor session that should feel responsive, so it sorts last.
+  case "$ovs" in FORCE*) share=1 ;; *) share=0 ;; esac
   case "$p" in p_*) lab=lab ;; *) lab=general ;; esac
-  printf '%s %s %s\n' "$p" "$e" "$lab"
-done | sort -k2,2n
+  printf '%s %s %s %s %s\n' "$p" "$e" "$lab" "${tier:-0}" "$share"
+done | sort -k5,5n -k4,4nr -k2,2n
 REMOTE
     probe="$(printf '%s' "$remote_script" |
       ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" 'bash -se' 2>/dev/null || true)"
-    local lab_part general_part
+    # SORTED BY PriorityTier DESCENDING, then by predicted start. Every Amarel
+    # partition is PreemptMode=REQUEUE (verified 2026-08-21), so tier is what
+    # decides whether a higher-tier job can requeue this session out from under
+    # the user with no warning. Measured the same day: main/cmain/nonpre are
+    # tier 10, cmem 20, graphical and the lab partitions 40. Picking purely by
+    # "starts soonest" chose cmain, the most preemptible option there is.
+    # Issue #21 called this out and it was right.
+    local lab_part general_part general_tier
     lab_part="$(printf '%s\n' "$probe"     | awk '$3=="lab"     {print $1; exit}')"
     general_part="$(printf '%s\n' "$probe" | awk '$3=="general" {print $1; exit}')"
+    general_tier="$(printf '%s\n' "$probe" | awk '$3=="general" {print $4; exit}')"
 
     if [[ -n "$lab_part" ]]; then
       info "You have access to the lab partition: $lab_part"
@@ -1037,7 +1051,16 @@ REMOTE
     fi
     if [[ -z "$partition" ]]; then
       partition="$general_part"
-      [[ -n "$partition" ]] && info "Using $partition, the general partition that would start soonest" || true
+      if [[ -n "$partition" ]]; then
+        info "Using $partition, the best general partition available to you"
+        if [[ -n "$general_tier" && "$general_tier" -lt 40 ]]; then
+          warn "$partition is PriorityTier=$general_tier and PreemptMode=REQUEUE."
+          say  "  A higher-tier job can requeue your session with no warning, and"
+          say  "  your editor just sees the connection die. If your group owns a"
+          say  "  partition, use it instead: 'dev-session status' will keep warning"
+          say  "  you while you are on a preemptible one."
+        fi
+      fi
     fi
     if [[ -z "$partition" ]]; then
       warn "No partition accepted a test submission. Skipping Phase 9.6."
@@ -1218,6 +1241,24 @@ ensure_ssh_dev_entry() {
 # ServerAliveInterval 15 IS COUPLED TO 'nc -i 120s' in amarel-dev-connect on the
 # cluster. The 120s idle timeout only survives because this side sends a
 # keepalive every 15s. Change one and you must change the other.
+#
+# YES, THIS REINTRODUCES ControlMaster, WHICH ISSUE #16 REMOVED. #16 was about
+# the LOGIN-NODE block, where ControlMaster bought nothing and a dead socket
+# left VS Code hanging on "Unable to resolve resource", twice on 2026-06-05.
+# That block still has no ControlMaster and must not get one. Here it is
+# load-bearing for a different reason, and both of #16's failure modes were
+# re-tested on 2026-08-21 against this config:
+#   persist window expires   socket removed cleanly, next connect 2s, no hang
+#   job cancelled under it   "read from master failed: Broken pipe", ssh falls
+#                            back to a fresh connect and reprovisions, no hang
+# The difference from #16 is this block's ControlPath (a %C hash, not a path
+# built from %r@%h:%p) and the 15x3 keepalive above. If you remove the keepalive
+# you are back to #16.
+#
+# Removing ControlPersist would let a failing ProxyCommand's message reach the
+# user, which it otherwise cannot: see amarel-dev-connect's header. It was
+# measured and rejected on 2026-08-21, because without it the first window owns
+# the master and closing that window kills every other window.
 Host amarel-dev
   User $AMAREL_USER
   IdentityFile $SSH_KEY_PATH

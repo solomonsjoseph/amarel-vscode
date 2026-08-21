@@ -2537,17 +2537,41 @@ for p in $(sinfo -h -o '%R' | sort -u); do
   case "$out" in *"to start at"*) ;; *) continue ;; esac
   t=$(printf '%s' "$out" | sed -e 's/.*to start at //' -e 's/ .*//')
   e=$(date -d "$t" +%s 2>/dev/null) || continue
+  d=$(scontrol show partition "$p" 2>/dev/null | tr ' ' '\n')
+  tier=$(printf '%s' "$d" | awk -F= '/^PriorityTier=/{print $2; exit}')
+  ovs=$(printf '%s' "$d" | awk -F= '/^OverSubscribe=/{print $2; exit}')
+  case "$ovs" in FORCE*) share=1 ;; *) share=0 ;; esac
   case "$p" in p_*) lab=lab ;; *) lab=general ;; esac
-  printf '%s %s %s\n' "$p" "$e" "$lab"
-done | sort -k2,2n
+  printf '%s %s %s %s %s\n' "$p" "$e" "$lab" "${tier:-0}" "$share"
+done | sort -k5,5n -k4,4nr -k2,2n
 REMOTE
 ```
 
+Columns: partition, predicted start, lab or general, `PriorityTier`, and 1 when
+the partition oversubscribes CPUs.
+
+**The sort is the whole point, so do not reduce it to "starts soonest".** Every
+Amarel partition is `PreemptMode=REQUEUE`, verified 2026-08-21, so `PriorityTier`
+decides whether a higher-tier job can requeue the session out from under the
+user with no warning: the editor just sees the connection die. Measured the same
+day: `main`, `cmain` and `nonpre` are tier 10, `cmem` and `mem` are 20,
+`graphical` and the lab partitions are 40. Sorting by start time alone picked
+`cmain`, the most preemptible option available. `graphical` sorts last despite
+tier 40 because it is `OverSubscribe=FORCE:5`, which shares each CPU five ways
+and caps at one day.
+
 Offer the first `lab` row (a `p_*` partition, their group's own hardware) if
-there is one, because a lab partition usually starts sooner and does not spend
-the user's general allocation. Otherwise take the first `general` row, which is
-the one that would start soonest. If nothing accepts a test submission, stop and
-tell the user to check `sinfo` and their account associations.
+there is one: it is the safest and does not spend the user's general allocation.
+Otherwise take the first `general` row. **If that row's tier is under 40, say so
+plainly** rather than quietly accepting it:
+
+> `cmem` is `PriorityTier=20` and `PreemptMode=REQUEUE`. A higher-tier job can
+> requeue your session with no warning, and your editor just sees the connection
+> die. If your group owns a partition, use that instead. `dev-session status`
+> keeps warning you while you are on a preemptible one.
+
+If nothing accepts a test submission, stop and tell the user to check `sinfo`
+and their account associations.
 
 ### 13.3 — Ask how long a session should be
 
@@ -2563,9 +2587,17 @@ except `dev-session stop`. This answer is the only waste control there is.
 > - `3d` the maximum on general partitions.
 >
 > A session ends at its walltime or when you run `dev-session stop`. Nothing
-> renews it, and nothing warns you before it ends.
+> renews it. `dev-session status` warns you once under two hours remain, but
+> nothing renews it for you, deliberately: an indefinitely rolling allocation is
+> the same behaviour OARC objected to, moved to a different node.
 >
 > Default if you have no preference: `3d`.
+
+**Tell the user this once, in their own interest:** how long a held session is
+acceptable is a site policy question, not a technical one. If they plan to hold
+multi-day sessions routinely, they should confirm with Rutgers OARC that it is
+acceptable for their account and partition. The skill caps nothing beyond the
+partition limit and the next maintenance window.
 
 Map the answer to `0-04:00:00`, `1-00:00:00` or `3-00:00:00`.
 
@@ -2688,6 +2720,24 @@ Host amarel-jump
 # ServerAliveInterval 15 IS COUPLED TO 'nc -i 120s' in amarel-dev-connect on the
 # cluster. The 120s idle timeout only survives because this side sends a
 # keepalive every 15s. Change one and you must change the other.
+#
+# YES, THIS REINTRODUCES ControlMaster, WHICH ISSUE #16 REMOVED. #16 was about
+# the LOGIN-NODE block, where ControlMaster bought nothing and a dead socket
+# left VS Code hanging on "Unable to resolve resource", twice on 2026-06-05.
+# That block still has no ControlMaster and must not get one. Here it is
+# load-bearing for a different reason, and both of #16's failure modes were
+# re-tested on 2026-08-21 against this config:
+#   persist window expires   socket removed cleanly, next connect 2s, no hang
+#   job cancelled under it   "read from master failed: Broken pipe", ssh falls
+#                            back to a fresh connect and reprovisions, no hang
+# The difference from #16 is this block's ControlPath (a %C hash, not a path
+# built from %r@%h:%p) and the 15x3 keepalive above. If you remove the keepalive
+# you are back to #16.
+#
+# Removing ControlPersist would let a failing ProxyCommand's message reach the
+# user, which it otherwise cannot: see amarel-dev-connect's header. It was
+# measured and rejected on 2026-08-21, because without it the first window owns
+# the master and closing that window kills every other window.
 Host amarel-dev
   User <NetID>
   IdentityFile ~/.ssh/id_ed25519_amarel
@@ -2793,6 +2843,20 @@ ssh -o BatchMode=yes amarel-jump true 2>/dev/null | wc -c
 
 If even `amarel-jump` fails, the problem is upstream of Phase 13: VPN, key auth
 or the login node. Route to Phase 0 and stop here.
+
+**Read the timing first, it splits the diagnosis in two.** From issue #22, the
+signature of a `ProxyCommand` dying before it ever opened a socket is
+`Connection closed by UNKNOWN port 65535`, **exit code 255, in under about two
+seconds** (measured there at 1549ms). `UNKNOWN` and port `65535`, which is
+`0xFFFF`, mean an unset socket. A real network or handshake failure against a
+live host takes longer and names a real host and port. So:
+
+- **Fast failure, under ~2s.** The cluster side never got as far as `nc`. Look
+  at the last-failure record and the selftest. This is far more common than the
+  GLIBC and key-auth problems the rest of this runbook covers in depth, so check
+  it **before** going anywhere near Phases 6 to 9.
+- **Slow failure, near the 300s ceiling.** Provisioning ran and did not finish
+  in time. Look at the queue and the walltime.
 
 `ssh -v amarel-dev true` also reveals the suppressed line, because `debug_flag`
 keeps stderr attached. Use it when the evidence above is inconclusive.

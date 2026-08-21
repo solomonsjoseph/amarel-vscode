@@ -102,7 +102,7 @@ cmd_ensure() {
 }
 
 cmd_status() {
-	local job fields elapsed cpus left node state wins m lf lft lfm
+	local job fields elapsed cpus left node state wins m lf lft lfm tier
 
 	# The last failed connect, first, because it is the reason the user is
 	# looking. The stderr line from a failing ProxyCommand is usually swallowed
@@ -131,6 +131,28 @@ cmd_status() {
 			say "amarel-dev: RUNNING on $node (job $job)"
 			say "  $cpus cores, $ADL_MEM       $elapsed elapsed, $left left"
 			say "  $wins window(s) connected"
+
+			# Issue #21 asked for this: when the job ends, the alias stops
+			# resolving and the editor fails to reconnect in a way that reads
+			# as a broken setup rather than an expired session. Nothing renews
+			# it, so the only defence is telling the user before it happens.
+			if [ "$(adl_tl_seconds "$left")" -lt 7200 ]; then
+				say ""
+				say "  ENDING SOON: under 2 hours left. Nothing renews it."
+				say "  Save your work. To start a fresh session now:"
+				say "    dev-session stop && dev-session ensure"
+			fi
+
+			# Every Amarel partition is PreemptMode=REQUEUE. On a low tier a
+			# higher-tier job can requeue this one with no warning, which the
+			# editor sees as a connection that simply died.
+			tier=$(adl_part_tier "$ADL_PARTITION")
+			if [ "$tier" -lt 40 ]; then
+				say ""
+				say "  PREEMPTIBLE: $ADL_PARTITION is PriorityTier=$tier."
+				say "  A higher-tier job can requeue this session with no warning."
+				say "  A lab partition (tier 40) is safer for long sessions."
+			fi
 		else
 			say "amarel-dev: $state (job $job)"
 			say "  waiting on: $(adl_pending_reason "$job")"

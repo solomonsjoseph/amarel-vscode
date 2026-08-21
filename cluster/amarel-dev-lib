@@ -216,6 +216,25 @@ adl_part_maxtime() {
 	adl_tl_seconds "$spec"
 }
 
+# PREEMPTION RISK. Every Amarel partition is PreemptMode=REQUEUE, verified
+# 2026-08-21, so what decides whether a session can be destroyed under you is
+# PriorityTier: a job can be preempted by one from a HIGHER tier. Measured the
+# same day:
+#     main, cmain, nonpre   PriorityTier=10   most exposed
+#     cmem                  PriorityTier=20
+#     graphical, p_wj183_1  PriorityTier=40   a lab partition, much safer
+# A requeued dev session dies with no warning and the editor sees a dropped
+# connection. This is why the setup offers a lab partition first, and why a low
+# tier is called out rather than silently accepted.
+adl_part_tier() {
+	local p tier
+	p="${1:-$ADL_PARTITION}"
+	[ -n "$p" ] || { echo 0; return 0; }
+	tier=$(scontrol show partition "$p" 2>/dev/null |
+		tr ' ' '\n' | awk -F= '/^PriorityTier=/{print $2; exit}')
+	printf '%s' "${tier:-0}"
+}
+
 # --------------------------------------------------------------------------
 # The walltime rule. One copy, this one.
 # --------------------------------------------------------------------------

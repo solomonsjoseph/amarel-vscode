@@ -331,6 +331,73 @@ No issue was filed for this one: the fault was injected by hand during testing,
 not a repo defect. `gh auth status` was checked and the active account is
 `solomonsjoseph`, matching the repo owner.
 
+## Issue audit, every issue this repo has ever had
+
+Checked against this branch, not assumed.
+
+| # | What it required | State |
+|---|---|---|
+| 3 | Source Control git.path, Phase 11 / setup 9.5 | intact, untouched by Phase 13 |
+| 14 | reset must run the remote SSH cleanup BEFORE wiping known_hosts | intact. The Phase 13 cluster wipe was added inside step 1, the remote block, and known_hosts is still step 4 |
+| 15 | Phase 3.0 probe must verify the key is ACCEPTED, not merely offered | intact. It greps `authorized_keys` through the connection |
+| 16 | ControlMaster stale socket hung VS Code, so remove it | login-node block still has none and must not get one. Phase 13 reintroduces it on `amarel-dev` only, for a different reason, and both of #16's failure modes were re-tested. See below |
+| 18 | Windows: no `-tt` in the key install | intact, `-tt` survives only in explanatory comments |
+| 21 | the compute-node session itself | delivered as Phase 13, with three gaps found in this audit and closed |
+| 22 | cold connect must self-heal instead of failing | delivered. The ProxyCommand provisions, and #22's timing fingerprint is now in 13.10 |
+| 23 | tracking issue for Phase 13 | to be closed against the new issue |
+
+### #16 re-tested against this config, 2026-08-21
+
+```
+persist window expires   socket removed cleanly, next connect 2s, no hang
+job cancelled under it   "read from master failed: Broken pipe", ssh falls back
+                         to a fresh connect and reprovisions, no hang
+```
+
+Neither reproduces. The differences from #16 are this block's `ControlPath` (a
+`%C` hash rather than a path built from `%r@%h:%p`) and the 15x3 keepalive.
+Remove the keepalive and #16 comes back. A cross-reference saying so now sits in
+the config comment, in `setup.sh` and both runbooks.
+
+There is a bounded window, seconds long, where the master can still serve a node
+whose allocation has just ended. SLURM's cgroup containment kills the adopted
+session, and the keepalive tears the master down in 15-30s. Observed once during
+this audit: `squeue` empty while a connect still answered, self-corrected inside
+half a minute.
+
+### Three gaps in #21 that were open until this audit
+
+**1. No expiry warning.** #21 asked for one in as many words: when the job ends
+the alias stops resolving and the editor fails in a way that reads as a broken
+setup rather than an expired session. `dev-session status` now warns under two
+hours. Verified by trimming a live job to 45 minutes.
+
+**2. The partition picker preferred the most preemptible option.** Every Amarel
+partition is `PreemptMode=REQUEUE`, verified today, so `PriorityTier` decides
+whether a higher-tier job can requeue the session with no warning. Measured:
+
+```
+main, cmain, nonpre   tier 10   OverSubscribe=NO     MaxTime 3-00:00:00
+cmem, mem             tier 20   OverSubscribe=NO     MaxTime 3-00:00:00
+graphical             tier 40   OverSubscribe=FORCE:5  MaxTime 1-00:00:00
+p_wj183_1 (lab)       tier 40   OverSubscribe=NO     MaxTime 14-00:00:00
+```
+
+Sorting by predicted start alone chose `cmain`, tier 10. The probe now sorts by
+oversubscription, then tier descending, then start, which chooses `cmem` for a
+user with no lab partition. `graphical` sorts last despite tier 40 because it
+shares each CPU five ways and caps at one day. `dev-session status` also warns
+whenever the configured partition is under tier 40. Verified by pointing the
+conf at `main`.
+
+**3. No OARC guidance on session duration.** #21 noted that acceptable duration
+is a site policy question, not a technical one. 13.3 and the README now say to
+confirm with OARC before holding multi-day sessions routinely.
+
+Also added from #21's notes: a README line saying the first connect to a compute
+node is slow once, because `~/.vscode-server` lives on shared home and
+bootstraps per node.
+
 ## Still live on the laptop, deliberately
 
 `~/bin/amarel-dev-proxy` and `~/bin/amarel-maint` are now dead code: nothing
