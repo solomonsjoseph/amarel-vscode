@@ -42,6 +42,7 @@ $SshDir         = Join-Path $env:USERPROFILE '.ssh'
 $SshKeyPath     = Join-Path $SshDir 'id_ed25519_amarel'
 $SshConfigPath  = Join-Path $SshDir 'config'
 $ComputeSessionReady = $false
+$ComputeSessionDeclined = $false   # user said no to Phase 9.6; not a failure
 $KnownHostsPath = Join-Path $SshDir 'known_hosts'
 
 $DefaultTarballUrl = 'https://github.com/solomonsjoseph/amarel-vscode/releases/latest/download/vscode-sysroot-x86_64-linux-gnu.tgz'
@@ -902,6 +903,24 @@ function Invoke-PhaseComputeSession {
     }
   }
 
+  # ── OPT-IN. Mirrors setup.sh. Ask before touching anything. ──────────────
+  # Most people want an editor on Amarel and nothing more. Declining leaves a
+  # complete login-node setup with nothing installed to undo.
+  Write-Host ""
+  Write-Human "Do you want to use a compute node for your work, if you run heavy tasks?"
+  Write-Host ""
+  Write-Host "  Heavy means builds, notebooks, training runs, language servers, or an"
+  Write-Host "  editor left open for hours. Rutgers OARC kills processes that load a"
+  Write-Host "  shared login node, and this is what keeps you off one."
+  Write-Host ""
+  Write-Host "  Saying yes automates the job scheduling, so one click books a compute"
+  Write-Host "  node and connects you to it."
+  Write-Host ""
+  if (-not (Confirm-User "Use a compute node for your work?")) {
+    $script:ComputeSessionDeclined = $true
+    return
+  }
+
   # ── Hard gate: the remote shell must be silent on stdout ─────────────────
   $noise = & ssh -o BatchMode=yes "$AmarelUser@$AmarelHost" true 2>$null
   if ($noise) {
@@ -1161,10 +1180,29 @@ function Invoke-PhaseFinish {
     Write-Host "  Status bar will show: SSH: amarel-dev" -ForegroundColor Green
     Write-Host ""
     Write-Host "  Manage the session: ssh amarel-jump bin/dev-session status | ensure | stop"
+  } elseif ($ComputeSessionDeclined) {
+    Write-Host "    4. Pick: $AmarelHost  (or type $AmarelUser@$AmarelHost)"
+    Write-Host "    5. Legacy CentOS 7 host only: click Allow on the 'OS unsupported' warning"
+    Write-Host "       the first time (RHEL 9 / amarel-new shows no such warning)"
+    Write-Host ""
+    Write-Host "  You are all set." -ForegroundColor Green
+    Write-Host ""
+    Write-Host "  If you ever want to use a compute node, with the job scheduling automated"
+    Write-Host "  so it happens on its own when you connect, come back and ask me. I will"
+    Write-Host "  set it up. Just say: 'set up the compute node for Amarel'."
   } else {
     Write-Host "    4. Pick: $AmarelHost  (or type $AmarelUser@$AmarelHost)"
     Write-Host "    5. Legacy CentOS 7 host only: click Allow on the 'OS unsupported' warning"
     Write-Host "       the first time (RHEL 9 / amarel-new shows no such warning)"
+    Write-Host ""
+    Write-Host "  ! Set up, but on a LOGIN NODE. The compute session is not installed." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Your editor will run on a shared login node. Rutgers OARC asks people"
+    Write-Host "  not to do that, and they do kill processes that load one up. Keep the"
+    Write-Host "  work light until this is fixed."
+    Write-Host ""
+    Write-Host "  To fix it: resolve what Phase 9.6 reported above, then re-run this"
+    Write-Host "  script. Nothing you have set up so far is lost."
     Write-Host ""
     Write-Host "  Status bar will show: SSH: $AmarelHost" -ForegroundColor Green
   }
