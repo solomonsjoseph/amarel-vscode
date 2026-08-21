@@ -1,7 +1,7 @@
 {
   "name": "amarel-vscode",
-  "version": "1.1.0",
-  "description": "Amarel VS Code Skill for Rutgers Amarel: set up VS Code Remote-SSH and fix the GLIBC 2.28 error. Works with Claude Code, Codex, or no LLM.",
+  "version": "1.2.0",
+  "description": "Amarel VS Code Skill for Rutgers Amarel: set up VS Code Remote-SSH, run the editor on a compute node instead of a login node, and fix the GLIBC 2.28 error. Works with Claude Code, Codex, or no LLM.",
   "author": {
     "name": "Community"
   },
@@ -13,6 +13,10 @@
     "rutgers",
     "rutgers-amarel",
     "hpc",
+    "dev-session",
+    "sbatch",
+    "compute-node",
+    "slurm",
     "vscode",
     "remote-ssh",
     "vscode-server",
@@ -27,14 +31,19 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Amarel VS Code Skill",
-    "shortDescription": "Set up VS Code Remote-SSH on Rutgers Amarel and fix the GLIBC 2.28 error.",
-    "longDescription": "Guides you through setting up VS Code Remote-SSH against the Rutgers Amarel HPC cluster (CentOS 7, glibc 2.17). Installs a custom-glibc 2.28 sysroot into your $HOME on Amarel so VS Code Server 1.99+ runs there, wires SSH key auth, deploys the sysroot, edits ~/.bashrc, applies the VS Code Server extension-signature workaround, fixes the Source Control 'no Git repository' failure by pointing VS Code at a modern git, and optionally wires up GitHub auth. Idempotent and safe to re-run. Requires Rutgers VPN and a valid Amarel account.",
+    "shortDescription": "Set up VS Code Remote-SSH on Rutgers Amarel, on a compute node rather than a login node.",
+    "longDescription": "Guides you through setting up VS Code Remote-SSH against the Rutgers Amarel HPC cluster. Wires SSH key auth and your OS keychain, verifies the host fingerprint, and detects whether you are on RHEL 9.6 or the legacy CentOS 7 host: on CentOS 7 it installs a custom-glibc 2.28 sysroot into your $HOME so VS Code Server 1.99+ runs there, and on RHEL 9.6 it skips that. It then installs an amarel-dev SSH target backed by a SLURM job, so every editor connection lands on a compute node instead of a login node, which is what Rutgers OARC requires. Afterwards it can show, schedule and stop that session for you. It also fixes the Source Control 'no Git repository' failure by pointing VS Code at a modern git, and optionally wires up GitHub auth. Idempotent and safe to re-run. Requires Rutgers VPN and a valid Amarel account.",
     "developerName": "Community",
     "category": "Productivity",
-    "capabilities": ["Read", "Write"],
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
     "websiteURL": "https://github.com/solomonsjoseph/amarel-vscode",
     "defaultPrompt": [
       "Use the amarel-vscode-setup skill to set up VS Code Remote-SSH on Amarel.",
+      "Use the amarel-vscode-setup skill to get my editor onto an Amarel compute node.",
+      "Use the amarel-vscode-setup skill to stop my Amarel dev session.",
       "Use the amarel-vscode-setup skill to fix the GLIBC 2.28 error on Amarel.",
       "Use the amarel-vscode-setup skill to fix the Source Control 'no Git repository' error on Amarel."
     ]
