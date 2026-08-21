@@ -1066,6 +1066,7 @@ REMOTE
     if [[ -z "$partition" ]]; then
       warn "No partition accepted a test submission. Skipping Phase 9.6."
       warn "Check 'sinfo' and your account associations, then re-run this script."
+      COMPUTE_SESSION_SKIP="no partition accepted a test submission"
       return 0
     fi
 
