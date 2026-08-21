@@ -1,27 +1,39 @@
 ---
 name: amarel-vscode-setup
 description: |
-  Amarel VS Code Skill: set up VS Code Remote-SSH on Rutgers Amarel and fix
-  the GLIBC 2.28 error on macOS or Windows. Works with Claude Code, Codex,
-  or a plain terminal workflow. Amarel is migrating from CentOS 7 (glibc 2.17)
-  to RHEL 9.6 (glibc 2.34) on the new host amarel-new.hpc.rutgers.edu; the skill
-  auto-detects the remote platform and deploys a custom-glibc sysroot only on
-  the legacy CentOS 7 host. Walks the user through the setup one terminal
-  command at a time, waiting for their confirmation between phases. Handles
-  SSH key auth, OS keychain integration, sysroot deployment to the user's
-  $HOME on Amarel, ~/.bashrc wiring, and the VS Code Server
-  extension-signature workaround. Also fixes the Source Control "no Git
-  repository" failure by pointing VS Code at a modern git on Amarel (Phase 11)
-  and optionally wires up GitHub auth (Phase 12). Idempotent and safe to re-run.
-  Requires Rutgers VPN connection and a valid Amarel account.
+  Amarel VS Code Skill: set up VS Code Remote-SSH on Rutgers Amarel, run the
+  editor on a COMPUTE node instead of a login node, and manage that compute
+  session afterwards. Also fixes the GLIBC 2.28 error. Works with Claude Code,
+  Codex, or a plain terminal workflow.
+
+  Use this skill for session management as well as setup. It handles: manage my
+  amarel session, is my session running, how much time is left, stop my amarel
+  job, cancel the job, kill my dev session, restart my session, schedule a new
+  job, give me a fresh 8 hour session, my amarel session died, my editor keeps
+  reconnecting to amarel, I landed on a login node, OARC killed my job. A user
+  who is already set up gets a status and schedule/stop menu, not the setup
+  runbook.
+
+  Setup covers: SSH key auth, OS keychain integration, host fingerprint
+  verification, and the VS Code Server extension-signature workaround. Amarel is
+  migrating from CentOS 7 (glibc 2.17) to RHEL 9.6 (glibc 2.34) on the new host
+  amarel-new.hpc.rutgers.edu; the skill auto-detects the remote platform and
+  deploys a custom-glibc sysroot only on the legacy CentOS 7 host. Phase 13
+  installs a SLURM-backed amarel-dev SSH target so every editor connection lands
+  on a compute node, which is what Rutgers OARC requires. Phase 11 fixes the
+  Source Control "no Git repository" failure by pointing VS Code at a modern git
+  on Amarel; Phase 12 optionally wires up GitHub auth. Walks the user through
+  the setup one terminal command at a time, waiting for their confirmation
+  between phases. Idempotent and safe to re-run. Requires Rutgers VPN connection
+  and a valid Amarel account.
 ---
 
 > **Execution contract:**
 > 1. This skill executes `[EXEC]` steps autonomously via its Bash tool; it never asks the user to run them.
-> 2. All `[EXEC]` steps are noninteractive: SSH/SCP calls use `-o BatchMode=yes`; no interactive prompts are expected. **Key-auth denial scope (Phases 1–5):** before the key is loaded into the agent (Phase 4.1), the **skip probes** (Phase 1.0 Gate-1 and Phase 3.0) return `Permission denied (publickey,…)` *by construction* — this is an **expected routing signal**, not a failure (Phase 1.0 silences this probe's stderr; only its exit code routes SKIP/PROCEED). Treat an auth failure as a hard failure to escalate only (a) on any `[EXEC]` step in Phases 6–12, or (b) in Phases 1–5 if a denial persists **after** Phase 4.2 confirms the key is loaded (e.g. the Phase 4.2.1 dedupe should succeed once the key is loaded). Never re-run a `[TTY]` password/passphrase step (e.g. Phase 3.1) in response to an expected pre-load denial. Any *non-auth* error (network, missing tool, unexpected output) is always surfaced.
+> 2. All `[EXEC]` steps are noninteractive: SSH/SCP calls use `-o BatchMode=yes`; no interactive prompts are expected. **Key-auth denial scope (Phases 1–5):** before the key is loaded into the agent (Phase 4.1), the **skip probes** (Phase 1.0 Gate-1 and Phase 3.0) return `Permission denied (publickey,…)` *by construction* — this is an **expected routing signal**, not a failure (Phase 1.0 silences this probe's stderr; only its exit code routes SKIP/PROCEED). Treat an auth failure as a hard failure to escalate only (a) on any `[EXEC]` step in Phases 6–13, or (b) in Phases 1–5 if a denial persists **after** Phase 4.2 confirms the key is loaded (e.g. the Phase 4.2.1 dedupe should succeed once the key is loaded). Never re-run a `[TTY]` password/passphrase step (e.g. Phase 3.1) in response to an expected pre-load denial. Any *non-auth* error (network, missing tool, unexpected output) is always surfaced.
 > 3. Key state discovered during execution (`LOCAL_OS`, `NetID`, `REPO_ROOT`, `USE_TARBALL`) is recorded at the phase that first establishes it and reused in all subsequent phases without re-deriving.
 > 4. **Host lock (transition period):** Two valid targets — the new **`amarel-new.hpc.rutgers.edu`** (RHEL 9.6, the default this runbook uses) and the legacy **`amarel.rutgers.edu`** (CentOS 7, being retired). Commands below are written for `amarel-new.hpc.rutgers.edu`; if the user is deliberately on the legacy host, substitute `amarel.rutgers.edu` in every command. Do **not** substitute any *other* hostname — not `amarel2.rutgers.edu`, not any other `*.rutgers.edu` host. Phase 5.5 auto-detects the remote glibc and routes the sysroot work accordingly, so whichever of the two hosts the user targets is handled correctly.
-> 5. **Verify; never take "done" on faith.** When a step hands off to the user (a `[TTY]` command, a GUI action, a `fresh` reset, a `gh` login) and they reply "done", run a read-only probe to confirm the *actual* outcome **before you advance or ask the next question** — the user saying it worked is not proof it worked. And before running any step, probe whether its outcome is already in place: if it is, **skip** it (a resume); if stale residue from a prior run remains where a `fresh` start should have cleaned it, **remove it first**. The skip-probes (Phases 1, 3, 4, 7, 9, 11, 12) already embody this — extend the same discipline to every hand-off, including the reset and the GitHub steps that historically advanced on the user's word alone.
+> 5. **Verify; never take "done" on faith.** When a step hands off to the user (a `[TTY]` command, a GUI action, a `fresh` reset, a `gh` login) and they reply "done", run a read-only probe to confirm the *actual* outcome **before you advance or ask the next question** — the user saying it worked is not proof it worked. And before running any step, probe whether its outcome is already in place: if it is, **skip** it (a resume); if stale residue from a prior run remains where a `fresh` start should have cleaned it, **remove it first**. The skip-probes (Phases 1, 3, 4, 7, 9, 11, 12, 13) already embody this — extend the same discipline to every hand-off, including the reset and the GitHub steps that historically advanced on the user's word alone.
 
 # amarel-vscode-setup
 
@@ -40,7 +52,10 @@ is skipped. Phase 5.5 detects which host you are on and routes accordingly.
 ## How to run this skill (read this first)
 
 **Two entry modes — decide before Phase 0.**
-- **Full setup** (first-time VS Code-on-Amarel): run Phases 0 → 12 in order.
+- **Full setup** (first-time VS Code-on-Amarel): run Phases 0 → 13 in order,
+  with one exception: **Phase 13 runs before Phase 10**, because Phase 13
+  decides which host the user picks in the Remote-SSH menu. So the real
+  order is 0 → 9, then 13, then 10 → 12.
 - **Targeted repair** (the user is *already connected* — status bar shows
   `SSH: amarel-new.hpc.rutgers.edu` — and only reports a **Source Control** problem
   ["no Git repository", the repo won't sync, "Initialize Repository" keeps
@@ -146,11 +161,15 @@ The complete human touch-point list — everything not on this list is `[EXEC]`:
 | 2 | 3.1 | `bash ~/.cache/amarel-vscode/step-3.1.sh` (staged ssh-copy-id) | **⚠ LAST AMAREL PASSWORD EVER** — password on TTY | All |
 | 3 | 3.1.1 | `ssh -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu` | Key passphrase on TTY; confirms key installed | All |
 | 4 | 4.1 | `ssh-add --apple-use-keychain …` / `ssh-add …` | Passphrase to agent on TTY | All |
-| 5 | 10 | VS Code GUI — click Allow, watch status bar | No Bash equivalent | All |
+| 5 | 10 | VS Code GUI — pick `amarel-dev`, click Allow, watch status bar | No Bash equivalent | All |
 
 **TTY budget:** macOS = 5 · Linux = 5 · Windows = 6 (Phase 4.1 Windows has two
 mandatory steps: `Start-Service` + `ssh-add`. The Phase 4.4 `~/.zshrc` append
-is `[EXEC]`, not a hand-off — see Phase 4.4).
+is `[EXEC]`, not a hand-off — see Phase 4.4)
+
+**Phase 13 adds no new terminal moment.** Its steps are all `[EXEC]`, and its two
+questions (partition, session length) are asked in conversation, not at a TTY. It
+changes only *which* host the user picks at moment 5.
 
 **Linux keychain note:** The Linux per-session guarantee means zero prompts
 within a single login session. A reboot-spanning guarantee requires persistent
@@ -174,10 +193,14 @@ one-line description), but this is the orientation that makes the rest make sens
 >    point VS Code Server at it, which clears the `GLIBC >= 2.28` error. **On the
 >    new RHEL 9 host (amarel-new) Phase 5.5 auto-detects this and skips it** —
 >    nothing to install.
-> 3. **Connect (Phases 9–10)** — on the legacy host I flip one VS Code setting,
->    then you connect from VS Code's **Remote-SSH** menu (on RHEL 9 you just
->    connect — no setting needed).
-> 4. **Git & GitHub (Phases 11–12, optional)** — if you'll use Source Control, I
+> 3. **A compute node of your own (Phase 13)** — I set up an entry called
+>    `amarel-dev`. Picking it gets you a private slice of a compute node, so your
+>    editor never runs on a login node. If no session is running, one is booked
+>    for you and the connection waits a few seconds for it.
+> 4. **Connect (Phases 9–10)** — on the legacy host I flip one VS Code setting,
+>    then you connect from VS Code's **Remote-SSH** menu and pick **`amarel-dev`**
+>    (on RHEL 9 there is no setting to flip).
+> 5. **Git & GitHub (Phases 11–12, optional)** — if you'll use Source Control, I
 >    point VS Code at a modern git on Amarel; Phase 12 wires up GitHub if you push
 >    from Amarel.
 >
@@ -347,6 +370,40 @@ ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o Identiti
 This is the path for "I'm already connected but Source Control says *no Git
 repository*" — recognise the symptom, confirm with the probe, and go straight to
 the fix.
+
+#### 0.2b — Session management fast path (`READY` + a session intent)
+
+A `READY` user who arrives asking about their **session** rather than about setup
+does not want Phase 0 at all. **Route on intent, not on a magic phrase.** All of
+these mean the session menu:
+
+```
+manage my amarel session      stop my amarel job       cancel the job
+restart my session            schedule a new job       how much time is left
+give me a fresh 8 hour session                         is my session running
+```
+
+Read the current state yourself first, then print the menu:
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes amarel-jump bin/dev-session status
+```
+
+> **amarel-dev: RUNNING on gpuk012**
+> 4 cores, 16G · 2 days 3 hours left · 1 window connected
+>
+> - `schedule` a new session, and pick the length
+> - `stop` release this job now
+> - `nothing` just looking
+
+Always show elapsed time, cores and time remaining. That visibility is the point:
+it is what catches a session sitting idle for twenty hours.
+
+If `dev-session` is not installed on the cluster, this user has not run Phase 13.
+Offer Phase 13 instead of the menu.
+
+The commands and the two `stop` guards are in **Phase 13.9**.
 
 ---
 
@@ -1850,23 +1907,35 @@ already open (otherwise no action needed).
 > 1. Open VS Code.
 > 2. `Cmd+Shift+P` (Mac) / `Ctrl+Shift+P` (Win/Linux).
 > 3. Type and run: **Remote-SSH: Connect to Host**.
-> 4. From the list, pick the host **`amarel-new.hpc.rutgers.edu`**. The list shows host
->    *aliases* from your SSH config, so this is just `amarel-new.hpc.rutgers.edu` — your
->    NetID is already baked into the config; you do **not** type `NetID@host`.
+> 4. From the list, pick **`amarel-dev`**. The list shows host *aliases* from your
+>    SSH config, so this is just `amarel-dev`; your NetID is already baked into the
+>    config and you do **not** type `NetID@host`.
 > 5. First time only: click **Allow** on the "OS unsupported" warning.
 > 6. Open View → Output, dropdown → Remote-SSH. Watch for `Server started`.
-> 7. Bottom-left status bar shows **SSH: amarel-new.hpc.rutgers.edu** (green).
+> 7. Bottom-left status bar shows **SSH: amarel-dev** (green).
 >
-> ⚠️ **Pick the right entry.** The dropdown may also list a separate
-> **`rutgers.edu`** entry (a different host that this skill did **not** create).
-> **Do not click `rutgers.edu`** — it will not connect to Amarel. Always choose
-> **`amarel-new.hpc.rutgers.edu`**. (That stray `rutgers.edu` entry is harmless for now;
-> cleaning it out of your SSH config is a separate fix we'll do later.)
+> ⚠️ **Pick the right entry.** Your dropdown lists other names too, and only
+> `amarel-dev` is an editor target:
+>
+> - **`amarel-dev`** ✅ what you want. Lands on a compute node.
+> - **`amarel-jump`** ❌ plumbing. A login node. `amarel-dev` hops through it.
+> - **`amarel-new.hpc.rutgers.edu`** ❌ a login node. Running an editor server
+>   here is the exact thing OARC objected to, and your Amarel `~/.bash_profile`
+>   now refuses it.
+> - **`rutgers.edu`** ❌ a different host this skill did not create. It will not
+>   connect to Amarel.
+>
+> The two login-node entries are guarded, so clicking one fails with a readable
+> message rather than loading the login node. Still, pick `amarel-dev`.
 
 **Common failures (linked recovery branches; none run on a clean first install):**
 
 - `expected GLIBC >= v2.28.0` → Phase 8 didn't take. Re-run 8.2; fix `~/.bashrc` if env var empty (8.3).
 - `signature verification failed with UnknownError` on "Install in SSH" → run **Phase 9**. If Phase 9 reports `TOOL=NONE`, have the user add `module load python` to `~/.bashrc` (above any non-interactive `return`) so python3 reaches non-interactive shells, then re-trigger Phase 9.
+- The connect fails with `amarel-dev: …` on one line → that is Phase 13's own
+  diagnostic. Read it, then see **Phase 13 → Common failures**.
+- The status bar goes green but `hostname` says `amarel3` / `amarel4` → the user
+  picked a login-node entry. Have them reconnect to **`amarel-dev`**.
 - `Could not find pty 4 on pty host` → harmless cosmetic noise (seen in canonical manual run). Ignore.
 - VS Code prompts for password → SSH key auth not fully working. Re-run Phase 4.2 verify and Phase 4.3 ssh_config validation.
 - VS Code server segfaults / patching fails after Allow → likely patchelf issue; **Phase 7.7 should have caught this**, but re-run 7.7 → 7.8 if needed.
@@ -2368,6 +2437,336 @@ interactive rebase (`git rebase -i`) and re-stamp each, or `git filter-repo`.
 
 ---
 
+## Phase 13 — Compute-node dev session (`amarel-dev`)
+
+**Goal:** Give the user an editor target that lands on a **compute node** every
+time, instead of a login node.
+
+**Run this before Phase 10.** It decides which host the user picks in the
+Remote-SSH menu, so running it after the connect step would send them to the
+login node first and then move them.
+
+**Why this exists.** OARC kills processes that load the login nodes. The editor
+is not a thin client: its extension host alone was measured at 145 threads on
+`amarel3`. Phase 13 puts a SLURM holder job on a compute node and points an SSH
+alias at whichever node that job landed on, resolved fresh at every connect.
+
+**What it installs.** Everything is under the user's own `$HOME`. Nothing
+shared, nothing privileged, nothing setuid.
+
+| Where | What |
+|---|---|
+| Amarel `~/bin/amarel-dev-lib` | shared helpers (walltime maths, maintenance lookup, job lookup) |
+| Amarel `~/bin/dev-session` | `ensure` / `status` / `node` / `stop` |
+| Amarel `~/bin/amarel-dev-connect` | the connect-time brain, run by the `ProxyCommand` |
+| Amarel `~/.amarel-dev.conf` | the only per-user file: partition, cores, memory, default walltime, log dir |
+| Amarel `~/.bash_profile` | a marked block that refuses an editor server on a login node |
+| Local `~/.ssh/config` | two blocks, `amarel-jump` then `amarel-dev` |
+
+Source files live in the repo at `cluster/`. If you are running from the skill
+without a repo checkout, tell the user to clone the repo first; there is nothing
+to copy otherwise.
+
+### 13.0 — Skip probe
+
+If both `ssh_config` blocks exist and the cluster side self-tests clean, Phase 13
+is already done. Run this yourself:
+
+[EXEC]
+```bash
+grep -q '^Host amarel-jump$' ~/.ssh/config && grep -q '^Host amarel-dev$' ~/.ssh/config && ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bin/amarel-dev-connect --selftest' >/dev/null 2>&1 && echo "SKIP" || echo "PROCEED"
+```
+
+`SKIP` → go to Phase 10 and tell the user to pick `amarel-dev`.
+
+### 13.1 — Hard gate: the remote shell must be silent on stdout
+
+**This is a refusal, not a warning.** The `ProxyCommand`'s stdout *is* the SSH
+tunnel. Every byte a chatty `~/.bashrc` writes to stdout is fed into the byte
+stream and corrupts the handshake, and the failure is unreadable. Check before
+writing any config:
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu true 2>/dev/null | wc -c
+```
+
+`0` → continue. Anything else → **stop Phase 13** and print the offending output
+to the user, with the fix:
+
+> Your Amarel `~/.bashrc` prints to stdout even on a non-interactive login. That
+> would corrupt the `amarel-dev` tunnel, so I am not writing the config.
+>
+> Wrap the offending lines in your Amarel `~/.bashrc` with:
+>
+> ```bash
+> case $- in *i*) ;; *) return ;; esac
+> ```
+>
+> then tell me and I will re-check.
+
+### 13.2 — Pick a partition (detect, never assume)
+
+Only when `~/.amarel-dev.conf` does not already exist. An existing conf is the
+user's and is preserved, which is also what keeps a re-run quiet.
+
+Partition access is **detected**. `sbatch --test-only` predicts a start time and
+a node without submitting anything:
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'REMOTE'
+set -uo pipefail
+for p in $(sinfo -h -o '%R' | sort -u); do
+  out=$(sbatch --test-only -p "$p" -c 4 --mem=16G --time=1-00:00:00 --job-name=amarel-dev-probe --wrap true 2>&1) || continue
+  case "$out" in *"to start at"*) ;; *) continue ;; esac
+  t=$(printf '%s' "$out" | sed -e 's/.*to start at //' -e 's/ .*//')
+  e=$(date -d "$t" +%s 2>/dev/null) || continue
+  case "$p" in p_*) lab=lab ;; *) lab=general ;; esac
+  printf '%s %s %s\n' "$p" "$e" "$lab"
+done | sort -k2,2n
+REMOTE
+```
+
+Offer the first `lab` row (a `p_*` partition, their group's own hardware) if
+there is one, because a lab partition usually starts sooner and does not spend
+the user's general allocation. Otherwise take the first `general` row, which is
+the one that would start soonest. If nothing accepts a test submission, stop and
+tell the user to check `sinfo` and their account associations.
+
+### 13.3 — Ask how long a session should be
+
+**Ask this. Do not assume a default silently.** The job holds its cores for the
+whole walltime whether or not anyone is typing, and nothing releases it early
+except `dev-session stop`. This answer is the only waste control there is.
+
+> **How long should your dev sessions be?**
+>
+> - `4h` a focused block. Starts fastest, because short jobs fit into gaps a
+>   3 day job cannot.
+> - `1d` a working day.
+> - `3d` the maximum on general partitions.
+>
+> A session ends at its walltime or when you run `dev-session stop`. Nothing
+> renews it, and nothing warns you before it ends.
+>
+> Default if you have no preference: `3d`.
+
+Map the answer to `0-04:00:00`, `1-00:00:00` or `3-00:00:00`.
+
+### 13.4 — Install the cluster side
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'mkdir -p ~/bin'
+scp -q <REPO_ROOT>/cluster/amarel-dev-lib <REPO_ROOT>/cluster/dev-session <REPO_ROOT>/cluster/amarel-dev-connect <NetID>@amarel-new.hpc.rutgers.edu:bin/
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'chmod 755 ~/bin/dev-session ~/bin/amarel-dev-connect; chmod 644 ~/bin/amarel-dev-lib'
+```
+
+`scp` does not carry the executable bit from a repo checkout reliably, so set it
+explicitly rather than trusting the source file's mode.
+
+Then the conf, **only if 13.2 ran**. Substitute the partition and walltime you
+settled on:
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<REMOTE
+set -uo pipefail
+cat > "\$HOME/.amarel-dev.conf" <<CONF
+# ~/.amarel-dev.conf, written by the amarel-vscode skill, Phase 13.
+# Safe to edit. Parsed as KEY=VALUE, never sourced as shell.
+AMAREL_DEV_PARTITION=<PARTITION>
+AMAREL_DEV_CPUS=4
+AMAREL_DEV_MEM=16G
+AMAREL_DEV_WALLTIME=<WALLTIME>
+AMAREL_DEV_LOG_DIR=\$HOME/.amarel-dev-logs
+CONF
+chmod 600 "\$HOME/.amarel-dev.conf"
+REMOTE
+```
+
+The conf is **parsed as `KEY=VALUE` and never sourced**, and every value is
+whitelist-validated before it reaches an `sbatch` command line. Do not change
+that to a `source`.
+
+### 13.5 — The login-node guard
+
+Append the guard block to Amarel's `~/.bash_profile`, once. It is wrapped in
+`# >>> amarel-vscode phase 13 >>>` markers so the reset can strip it again:
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'grep -q "^# >>> amarel-vscode phase 13 >>>$" ~/.bash_profile 2>/dev/null' && echo "ALREADY" || ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'cat >> ~/.bash_profile' < <REPO_ROOT>/cluster/bash_profile_block.sh
+```
+
+This guard refusing an editor server on a login node is **part of the
+deliverable, not optional**. It is the thing that makes the outcome match what
+OARC asked for even if the user clicks the wrong menu entry.
+
+### 13.6 — Gate on the cluster-side self-test
+
+**Do not write the `ssh_config` blocks until this passes.** A config written
+before the cluster side works produces a first click that fails with
+`No such file or directory`, which reads as the skill being broken.
+
+[VERIFY]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bin/amarel-dev-connect --selftest'
+```
+
+Expect a listing ending in `selftest: OK`. It reports the conf it found, the
+partition, the request size, the walltime it would ask for after clamping, every
+SLURM tool it needs, GNU `date -d`, and the next maintenance window. Any
+`MISSING:` line fails the gate; fix that before continuing.
+
+### 13.7 — Write the two `ssh_config` blocks
+
+**Order matters: `amarel-jump` first, then `amarel-dev`.** OpenSSH takes the
+first matching value for each keyword.
+
+Do **not** fold these into the existing `Host amarel-new.hpc.rutgers.edu` block
+or its writer. That writer returns early whenever the host block already exists,
+which is true for every existing user, so anything added below its guard would
+never be written.
+
+[EXEC] append to `~/.ssh/config`, substituting the NetID:
+
+```
+# Added by amarel-vscode Phase 13
+# Plumbing only. This is what the amarel-dev ProxyCommand hops through to reach
+# the cluster. DO NOT POINT YOUR EDITOR AT THIS ENTRY: it is a login node, and
+# connecting an editor here is the exact behaviour OARC objected to. The
+# cluster's ~/.bash_profile guard refuses an editor bootstrap here anyway, but
+# do not rely on that as the only defence.
+#
+# No ControlMaster here, deliberately. Measured 2026-08-07: the jump hop was a
+# flat 1.0s all afternoon while the compute leg swung 4-233s, so multiplexing it
+# would serialize a leg that is already fast and parallel.
+Host amarel-jump
+  HostName amarel-new.hpc.rutgers.edu
+  User <NetID>
+  IdentityFile ~/.ssh/id_ed25519_amarel
+  IdentitiesOnly yes
+  AddKeysToAgent yes
+  UseKeychain yes
+  ServerAliveInterval 60
+
+# Added by amarel-vscode Phase 13
+# The ONLY host your editor should target. The ProxyCommand runs on the CLUSTER
+# and resolves the current allocation's compute node at connect time, so this
+# keeps working when the job moves. It also provisions one when none is running,
+# which is why a first click works with no setup step of its own.
+#
+# KEEPALIVE IS TUNED FOR THE STALE-MASTER CASE. Do not raise it back to 60/10 to
+# "reduce chatter". When an allocation ends, the compute node's sshd dies but no
+# TCP reset reaches the laptop, because the connection runs through the login
+# node. The master is left holding a half-open socket and 'ssh -O check' still
+# says "Master running", wrongly. Measured 2026-08-20 by cancelling a job under
+# a live master:
+#     no ServerAlive   a connect attempt HUNG with no output (killed at 20s)
+#     60 x 10          master cleared at ~105-120s
+#     15 x 3 (this)    master cleared at 15-30s, socket removed cleanly
+# The editor's ceiling is 300s, so 15x3 clears well inside it and the next click
+# is a normal cold connect. Manual reset: ssh -O exit amarel-dev
+#
+# ServerAliveInterval 15 IS COUPLED TO 'nc -i 120s' in amarel-dev-connect on the
+# cluster. The 120s idle timeout only survives because this side sends a
+# keepalive every 15s. Change one and you must change the other.
+Host amarel-dev
+  User <NetID>
+  IdentityFile ~/.ssh/id_ed25519_amarel
+  IdentitiesOnly yes
+  ProxyCommand ssh -q amarel-jump bin/amarel-dev-connect
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ServerAliveInterval 15
+  ServerAliveCountMax 3
+  ControlMaster auto
+  ControlPath ~/.ssh/cm/%C
+  ControlPersist 30m
+```
+
+`UseKeychain yes` is macOS only. On Linux and Windows omit that line.
+
+`ControlMaster` / `ControlPath` / `ControlPersist` are macOS and Linux only.
+Windows OpenSSH has no ControlMaster support, so omit all three there and use
+`UserKnownHostsFile NUL` instead of `/dev/null`.
+
+`StrictHostKeyChecking no` with a throwaway `UserKnownHostsFile` is deliberate
+and scoped to this one alias: the compute node changes between allocations, so
+pinning its key would produce a host-key warning on every new job. The login
+node's fingerprint stays pinned by Phase 2, and that is the hop that actually
+authenticates the cluster.
+
+Create the control-socket directory if it does not exist:
+
+[EXEC]
+```bash
+mkdir -p ~/.ssh/cm && chmod 700 ~/.ssh/cm
+```
+
+### 13.8 — Verify one connect lands on a compute node
+
+[VERIFY]
+```bash
+ssh -o BatchMode=yes -o ConnectTimeout=300 amarel-dev hostname -s
+```
+
+Expect a compute node name (`gpuk008`, `hal0198`, and so on). **A result of
+`amarel3` or `amarel4` is a failure**, not a pass. First run may take a few
+seconds while a job is submitted and starts; a warm run is well under a second.
+
+Report the node to the user, then go to Phase 10.
+
+### 13.9 — Managing the session (this is lane 2)
+
+Once Phase 13 is in place, a user who says any of *stop my amarel job*, *is my
+session running*, *how much time is left*, *restart my session*, *give me a
+fresh 8 hour session* is asking for this, not for setup. See **Phase 0.2** for
+the routing, and print the session menu.
+
+The commands underneath, which also work as plain commands in any terminal:
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes amarel-jump bin/dev-session status
+ssh -o BatchMode=yes amarel-jump bin/dev-session ensure
+ssh -o BatchMode=yes amarel-jump bin/dev-session stop
+```
+
+`stop` carries two guards, in this order, and you must not route around them:
+
+1. It **refuses** if another editor window is still attached, and names the node.
+   A second window is someone else's floor.
+2. It **confirms** if the job's cgroup shows active CPU, because that means real
+   work is running. The cost of a false alarm is one keypress; the cost of a
+   miss is a lost computation.
+
+`--force` overrides both. Only pass it when the user has been told what is
+attached or running and says go ahead anyway.
+
+**There is no auto-renew and no idle reaper.** A job ends at its walltime or via
+`stop`, and nothing else. A rolling allocation is the behaviour OARC objected
+to, relocated, so do not add one.
+
+### Common failures
+
+- `amarel-dev: maintenance until <time>, cannot schedule.` The cluster is in a
+  maintenance reservation. This is the one legitimate refusal. Nothing to fix,
+  wait for the window to end.
+- `amarel-dev: job NNNN is queued (Resources) and has not started.` A normal
+  queue wait. Try again shortly, or pick a partition with a shorter queue.
+- The connect hangs and the editor gives up around 300s. Check the cluster-side
+  log at `~/.amarel-dev-logs/connect.log`, which records every step. Run 13.6's
+  self-test.
+- `No such file or directory` on the `ProxyCommand`. The cluster side is not
+  installed. Re-run 13.4.
+- The editor connects but lands on `amarel3` or `amarel4`. The user picked the
+  wrong menu entry. Point them at `amarel-dev`.
+
+---
+
 ## Security constraints — non-negotiable
 
 **You MUST NOT execute** `ssh-keygen` (Phase 1.2), `ssh-copy-id` (Phase 3.1),
@@ -2398,6 +2797,27 @@ You **MUST NOT**:
   Token. `gh auth login` stores and uses the token itself; the user types the
   device code into a browser on their own machine. Never paste a PAT into a
   command you run for them — hand them the command to run themselves.
+
+**Phase 13 (compute-node session) adds these, and each one is a test rather than
+an aspiration:**
+
+- Everything Phase 13 installs goes under the user's **own `$HOME`**. Nothing
+  shared, nothing privileged, nothing setuid.
+- Phase 13 stores **no credentials**. Auth stays the existing key from Phases 1–5.
+- `~/.amarel-dev.conf` is **parsed as `KEY=VALUE`, never sourced as shell**, and
+  every value is whitelist-validated before it reaches an `sbatch` command line.
+  Do not "simplify" that into a `source`.
+- **No auto-renew and no rolling allocation.** Every allocation traces back to a
+  human action. A background keepalive is the behaviour OARC objected to,
+  relocated.
+- The login node stays a **relay**. The `~/.bash_profile` guard refusing an editor
+  server there is part of the deliverable, not optional. Do not remove it to make
+  a login-node connection work.
+- Walltime is requested **honestly and clamped**, never padded to game the
+  scheduler. Any automatic adjustment may only **shorten** a job, never extend
+  one.
+- `dev-session stop --force` exists, but only pass it after telling the user what
+  is attached or running and getting a yes.
 
 If the user reports their password was leaked or something looks suspicious,
 stop and tell them to rotate their Amarel password via Rutgers OARC.

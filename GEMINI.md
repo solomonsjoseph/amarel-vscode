@@ -17,15 +17,20 @@ auto-detects which). When the user asks you to "set up Amarel" or "fix the
 Remote-SSH GLIBC error":
 
 1. Read `AGENTS.md` for the full step-by-step runbook + security constraints.
-2. Walk the user through **Phases 0–12 one command at a time.** For each
+2. Walk the user through **Phases 0–13 one command at a time.** For each
    phase, give them the exact command in a fenced block, tell them the
    success marker, wait for them to paste the result, then advance.
    (Phases 0–10 = SSH key auth + sysroot setup; **Phase 5.5** auto-detects the
    remote platform and skips the sysroot Phases 6–9 on RHEL 9.6; **Phase 11**
    points VS Code at a modern git on Amarel so Source Control detects repos;
-   **Phase 12** is optional GitHub auth + git identity.) **If the user is already connected and
+   **Phase 12** is optional GitHub auth + git identity; **Phase 13** installs the
+   `amarel-dev` compute-node session and **runs before Phase 10**, because it decides
+   which host the user picks in the Remote-SSH menu.) **If the user is already connected and
    only Source Control / git (or GitHub) is broken, use the Phase 0.2 fast path
    in `AGENTS.md` to jump straight to Phase 11/12 — don't re-run Phases 1–10.**
+   **If they are already set up and are asking about their session** ("stop my amarel
+   job", "is my session running", "how much time is left", "give me a fresh 8 hour
+   session"), use the Phase 0.2b session menu instead of the setup runbook.
 3. **Do not ask the user which OS they are on.** Infer it from context when
    possible; otherwise Phase 0 detects it and you branch from that output.
 4. **Do not run the scripts (`scripts/setup.sh` / `scripts/setup.ps1`)
@@ -39,7 +44,14 @@ Remote-SSH GLIBC error":
    question** — don't take "done" as proof. And skip steps already in place
    (resume) while cleaning stale residue on a fresh start. See `AGENTS.md`
    execution-contract point 5.
-7. **Dual-host transition.** The runbooks default to `amarel-new.hpc.rutgers.edu`.
+7. **The editor belongs on a compute node.** Phase 13 exists because OARC kills
+   processes that load the login nodes, and an editor server is not a thin client.
+   Never tell a user to point their editor at `amarel-new.hpc.rutgers.edu` or
+   `amarel-jump`; the only editor target is `amarel-dev`. Never remove the Amarel
+   `~/.bash_profile` guard to make a login-node connection work. Phase 13 stores no
+   credentials, installs only under the user's own `$HOME`, adds no auto-renew, and
+   any automatic walltime adjustment may only shorten a job, never extend one.
+8. **Dual-host transition.** The runbooks default to `amarel-new.hpc.rutgers.edu`.
    Command literals target the new host, but skip-probe / `known_hosts` / `ssh_config` /
    reset regexes in the runbooks are deliberately **widened** to `amarel(-new\.hpc)?\.rutgers\.edu`
    to match **both** hosts. Do **not** blanket find/replace the hostname.
