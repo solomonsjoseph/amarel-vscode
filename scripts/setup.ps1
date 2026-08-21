@@ -41,6 +41,7 @@ $SkillDir       = Split-Path -Parent $PSScriptRoot
 $SshDir         = Join-Path $env:USERPROFILE '.ssh'
 $SshKeyPath     = Join-Path $SshDir 'id_ed25519_amarel'
 $SshConfigPath  = Join-Path $SshDir 'config'
+$ComputeSessionReady = $false
 $KnownHostsPath = Join-Path $SshDir 'known_hosts'
 
 $DefaultTarballUrl = 'https://github.com/solomonsjoseph/amarel-vscode/releases/latest/download/vscode-sysroot-x86_64-linux-gnu.tgz'
@@ -867,6 +868,273 @@ fi
 }
 
 # ─── Phase 10 — Final instructions ─────────────────────────────────────────
+# ─── Phase 9.6 — Compute-node dev session (surfaced as Phase 13) ───────────
+# Mirror of phase_compute_session() in setup.sh. Read that one first; the
+# reasoning is identical and is not repeated here.
+#
+# WINDOWS DIFFERENCES, ALL DELIBERATE:
+#   - No ControlMaster / ControlPath / ControlPersist. Windows OpenSSH has no
+#     connection multiplexing. One upside: because nothing detaches a master,
+#     a failing ProxyCommand's stderr is NOT discarded here, so Windows users
+#     see the real reason where macOS and Linux users do not.
+#   - UserKnownHostsFile NUL, not /dev/null.
+#   - No UseKeychain, which is macOS only.
+function Invoke-PhaseComputeSession {
+  Write-Heading "Phase 9.6 — Compute-node dev session (amarel-dev)"
+
+  $clusterDir = Join-Path $SkillDir 'cluster'
+  foreach ($f in @('amarel-dev-lib', 'dev-session', 'amarel-dev-connect', 'bash_profile_block.sh')) {
+    if (-not (Test-Path (Join-Path $clusterDir $f))) {
+      Write-Warn "Missing $clusterDir\$f, skipping Phase 9.6."
+      return
+    }
+  }
+
+  # ── Skip probe ───────────────────────────────────────────────────────────
+  $haveJump = Select-String -Path $SshConfigPath -Pattern '^Host amarel-jump$' -Quiet -ErrorAction SilentlyContinue
+  $haveDev  = Select-String -Path $SshConfigPath -Pattern '^Host amarel-dev$'  -Quiet -ErrorAction SilentlyContinue
+  if ($haveJump -and $haveDev) {
+    & ssh -o BatchMode=yes "$AmarelUser@$AmarelHost" 'bin/amarel-dev-connect --selftest' *> $null
+    if ($LASTEXITCODE -eq 0) {
+      Write-Info "amarel-dev already set up and self-testing clean"
+      $script:ComputeSessionReady = $true
+      return
+    }
+  }
+
+  # ── Hard gate: the remote shell must be silent on stdout ─────────────────
+  $noise = & ssh -o BatchMode=yes "$AmarelUser@$AmarelHost" true 2>$null
+  if ($noise) {
+    Write-Err "Your Amarel shell prints to stdout on a plain 'ssh <host> true':"
+    $noise | ForEach-Object { Write-Host "      $_" }
+    Write-Err "That output rides on the amarel-dev tunnel, so Phase 9.6 is stopping here."
+    Write-Host "  Fix: wrap the offending lines in your Amarel ~/.bashrc with"
+    Write-Host '       case $- in *i*) ;; *) return ;; esac'
+    Write-Host "  then re-run this script."
+    return
+  }
+
+  # ── Ask, only when there is no conf yet ──────────────────────────────────
+  & ssh -o BatchMode=yes "$AmarelUser@$AmarelHost" 'test -f ~/.amarel-dev.conf' *> $null
+  $haveConf = ($LASTEXITCODE -eq 0)
+
+  $partition = ''
+  $walltime  = '3-00:00:00'
+
+  if ($haveConf) {
+    Write-Info "Keeping your existing ~/.amarel-dev.conf"
+  } else {
+    Write-Host "  Checking which partitions you can submit to..."
+    # Sorted by oversubscription, then PriorityTier descending, then predicted
+    # start. Every Amarel partition is PreemptMode=REQUEUE, so tier decides
+    # whether a higher-tier job can requeue the session with no warning.
+    $probeScript = @'
+set -uo pipefail
+for p in $(sinfo -h -o '%R' | sort -u); do
+  out=$(sbatch --test-only -p "$p" -c 4 --mem=16G --time=1-00:00:00 --job-name=amarel-dev-probe --wrap true 2>&1) || continue
+  case "$out" in *"to start at"*) ;; *) continue ;; esac
+  t=$(printf '%s' "$out" | sed -e 's/.*to start at //' -e 's/ .*//')
+  e=$(date -d "$t" +%s 2>/dev/null) || continue
+  d=$(scontrol show partition "$p" 2>/dev/null | tr ' ' '\n')
+  tier=$(printf '%s' "$d" | awk -F= '/^PriorityTier=/{print $2; exit}')
+  ovs=$(printf '%s' "$d" | awk -F= '/^OverSubscribe=/{print $2; exit}')
+  case "$ovs" in FORCE*) share=1 ;; *) share=0 ;; esac
+  case "$p" in p_*) lab=lab ;; *) lab=general ;; esac
+  printf '%s %s %s %s %s\n' "$p" "$e" "$lab" "${tier:-0}" "$share"
+done | sort -k5,5n -k4,4nr -k2,2n
+'@
+    $probe = $probeScript | & ssh -o BatchMode=yes "$AmarelUser@$AmarelHost" 'bash -se' 2>$null
+
+    $rows = @($probe | Where-Object { $_ -match '\S' } | ForEach-Object { , ($_ -split '\s+') })
+    $labRow     = $rows | Where-Object { $_[2] -eq 'lab' }     | Select-Object -First 1
+    $generalRow = $rows | Where-Object { $_[2] -eq 'general' } | Select-Object -First 1
+
+    if ($labRow) {
+      Write-Info "You have access to the lab partition: $($labRow[0])"
+      if (Confirm-User "Use $($labRow[0]) for your dev sessions?") { $partition = $labRow[0] }
+    }
+    if (-not $partition -and $generalRow) {
+      $partition = $generalRow[0]
+      Write-Info "Using $partition, the best general partition available to you"
+      if ([int]$generalRow[3] -lt 40) {
+        Write-Warn "$partition is PriorityTier=$($generalRow[3]) and PreemptMode=REQUEUE."
+        Write-Host "  A higher-tier job can requeue your session with no warning, and"
+        Write-Host "  your editor just sees the connection die. If your group owns a"
+        Write-Host "  partition, use it instead."
+      }
+    }
+    if (-not $partition) {
+      Write-Warn "No partition accepted a test submission. Skipping Phase 9.6."
+      Write-Warn "Check 'sinfo' and your account associations, then re-run this script."
+      return
+    }
+
+    Write-Human "How long should your dev sessions be?"
+    Write-Host ""
+    Write-Host "    4h   a focused block. Starts fastest: short jobs fit into gaps a"
+    Write-Host "         longer job cannot."
+    Write-Host "    8h   a working day."
+    Write-Host "    1d   overnight, or a run you want to leave going."
+    Write-Host "    2d   a long stretch."
+    Write-Host "    3d   the maximum on most general partitions."
+    Write-Host ""
+    Write-Host "    Or type a SLURM timespec yourself, for example 0-06:00:00."
+    Write-Host ""
+    Write-Host "    Your session holds its cores for the whole time you ask for,"
+    Write-Host "    whether or not you are typing. It ends at that walltime or when you"
+    Write-Host "    run 'dev-session stop'. Nothing renews it."
+    Write-Host ""
+    Write-Host "    There is no duration limit on Amarel. Asking for the shortest block"
+    Write-Host "    that covers your work just leaves the cores free for someone else in"
+    Write-Host "    between, and starting a new session is one click."
+    Write-Host ""
+    $answer = Read-Host "  ? Session length [4h/8h/1d/2d/3d or a timespec, default 3d]"
+    switch -Regex ($answer) {
+      '^(?i)4h$'  { $walltime = '0-04:00:00'; break }
+      '^(?i)8h$'  { $walltime = '0-08:00:00'; break }
+      '^(?i)1d$'  { $walltime = '1-00:00:00'; break }
+      '^(?i)2d$'  { $walltime = '2-00:00:00'; break }
+      '^(?i)3d$'  { $walltime = '3-00:00:00'; break }
+      '^$'        { $walltime = '3-00:00:00'; break }
+      default {
+        # Same whitelist the cluster-side parser uses: this lands on an sbatch
+        # command line, so anything else falls back to the stated default.
+        if ($answer -match '^([0-9]+-)?[0-9]{1,2}(:[0-9]{2}){0,2}$') {
+          $walltime = $answer
+        } else {
+          Write-Warn "'$answer' is not a SLURM timespec (D-HH:MM:SS). Using the default 3d."
+          $walltime = '3-00:00:00'
+        }
+      }
+    }
+    Write-Info "Sessions will request $walltime on $partition"
+  }
+
+  # ── Install the cluster side ─────────────────────────────────────────────
+  & ssh -o BatchMode=yes "$AmarelUser@$AmarelHost" 'mkdir -p ~/bin' *> $null
+  if ($LASTEXITCODE -ne 0) { Write-Warn "Could not create ~/bin on Amarel (non-fatal)."; return }
+
+  & scp -q (Join-Path $clusterDir 'amarel-dev-lib') (Join-Path $clusterDir 'dev-session') `
+           (Join-Path $clusterDir 'amarel-dev-connect') "${AmarelUser}@${AmarelHost}:bin/" *> $null
+  if ($LASTEXITCODE -ne 0) { Write-Warn "Could not copy the cluster scripts (non-fatal)."; return }
+  Write-Info "Installed ~/bin/{amarel-dev-lib,dev-session,amarel-dev-connect}"
+
+  # scp does not carry the executable bit from a repo checkout reliably.
+  & ssh -o BatchMode=yes "$AmarelUser@$AmarelHost" `
+      'chmod 755 ~/bin/dev-session ~/bin/amarel-dev-connect; chmod 644 ~/bin/amarel-dev-lib' *> $null
+
+  if (-not $haveConf) {
+    $confScript = @"
+set -uo pipefail
+cat > "`$HOME/.amarel-dev.conf" <<CONF
+# ~/.amarel-dev.conf, written by the amarel-vscode setup, Phase 13.
+# Safe to edit. Parsed as KEY=VALUE, never sourced as shell.
+AMAREL_DEV_PARTITION=$partition
+AMAREL_DEV_CPUS=4
+AMAREL_DEV_MEM=16G
+AMAREL_DEV_WALLTIME=$walltime
+AMAREL_DEV_LOG_DIR=`$HOME/.amarel-dev-logs
+CONF
+chmod 600 "`$HOME/.amarel-dev.conf"
+"@
+    $confScript | & ssh -o BatchMode=yes "$AmarelUser@$AmarelHost" 'bash -se' *> $null
+    if ($LASTEXITCODE -eq 0) { Write-Info "Wrote ~/.amarel-dev.conf" }
+    else { Write-Warn "Could not write ~/.amarel-dev.conf" }
+  }
+
+  # ── The login-node guard ─────────────────────────────────────────────────
+  & ssh -o BatchMode=yes "$AmarelUser@$AmarelHost" `
+      'grep -q "^# >>> amarel-vscode phase 13 >>>$" ~/.bash_profile 2>/dev/null' *> $null
+  if ($LASTEXITCODE -eq 0) {
+    Write-Info "~/.bash_profile already has the login-node guard"
+  } else {
+    Get-Content (Join-Path $clusterDir 'bash_profile_block.sh') -Raw |
+      & ssh -o BatchMode=yes "$AmarelUser@$AmarelHost" 'cat >> ~/.bash_profile' *> $null
+    if ($LASTEXITCODE -eq 0) { Write-Info "Appended the login-node guard to ~/.bash_profile" }
+    else { Write-Warn "Could not append the login-node guard (non-fatal)." }
+  }
+
+  # ── Gate on the cluster-side selftest ────────────────────────────────────
+  & ssh -o BatchMode=yes "$AmarelUser@$AmarelHost" 'bin/amarel-dev-connect --selftest' *> $null
+  if ($LASTEXITCODE -ne 0) {
+    Write-Err "The cluster-side selftest failed, so the ssh_config blocks were NOT written."
+    Write-Host "  A config written before the cluster side works gives a first click that"
+    Write-Host "  fails with 'No such file or directory'. See what is wrong with:"
+    Write-Host "    ssh $AmarelUser@$AmarelHost 'bin/amarel-dev-connect --selftest'"
+    return
+  }
+  Write-Info "Cluster-side selftest passed"
+
+  Set-SshJumpEntry
+  Set-SshDevEntry
+
+  $script:ComputeSessionReady = $true
+}
+
+# Siblings of Set-SshConfigEntry, NOT additions inside it: that function
+# returns early whenever Host <FQDN> already exists, which is true for every
+# existing user, so anything below its guard would never be written.
+# Jump is written before dev, because OpenSSH takes the first matching value
+# for each keyword.
+function Set-SshJumpEntry {
+  if (Select-String -Path $SshConfigPath -Pattern '^Host amarel-jump$' -Quiet -ErrorAction SilentlyContinue) {
+    Write-Info "~/.ssh/config already has Host amarel-jump"
+    return
+  }
+  $date = Get-Date -Format 'yyyy-MM-dd'
+  $entry = @"
+
+# Added by amarel-vscode Phase 13 on $date
+# Plumbing only. This is what the amarel-dev ProxyCommand hops through to reach
+# the cluster. DO NOT POINT YOUR EDITOR AT THIS ENTRY: it is a login node, and
+# connecting an editor here is the exact behaviour OARC objected to. The
+# cluster's ~/.bash_profile guard refuses an editor bootstrap here anyway, but
+# do not rely on that as the only defence.
+Host amarel-jump
+  HostName $AmarelHost
+  User $AmarelUser
+  IdentityFile $SshKeyPath
+  IdentitiesOnly yes
+  AddKeysToAgent yes
+  ServerAliveInterval 60
+"@
+  Add-Content -Path $SshConfigPath -Value $entry
+  Write-Info "~/.ssh/config: added Host amarel-jump"
+}
+
+function Set-SshDevEntry {
+  if (Select-String -Path $SshConfigPath -Pattern '^Host amarel-dev$' -Quiet -ErrorAction SilentlyContinue) {
+    Write-Info "~/.ssh/config already has Host amarel-dev"
+    return
+  }
+  $date = Get-Date -Format 'yyyy-MM-dd'
+  # No ControlMaster/ControlPath/ControlPersist: Windows OpenSSH has no
+  # multiplexing. UserKnownHostsFile is NUL here, not /dev/null.
+  $entry = @"
+
+# Added by amarel-vscode Phase 13 on $date
+# The ONLY host your editor should target. The ProxyCommand runs on the CLUSTER
+# and resolves the current allocation's compute node at connect time, so this
+# keeps working when the job moves. It also provisions one when none is running,
+# which is why a first click works with no setup step of its own.
+#
+# ServerAliveInterval 15 IS COUPLED TO 'nc -i 120s' in amarel-dev-connect on the
+# cluster. The 120s idle timeout only survives because this side sends a
+# keepalive every 15s. Change one and you must change the other.
+Host amarel-dev
+  User $AmarelUser
+  IdentityFile $SshKeyPath
+  IdentitiesOnly yes
+  ProxyCommand ssh -q amarel-jump bin/amarel-dev-connect
+  StrictHostKeyChecking no
+  UserKnownHostsFile NUL
+  ServerAliveInterval 15
+  ServerAliveCountMax 3
+"@
+  Add-Content -Path $SshConfigPath -Value $entry
+  Write-Info "~/.ssh/config: added Host amarel-dev"
+}
+
 function Invoke-PhaseFinish {
   Write-Heading "Phase 10 — Open VS Code"
   Write-Host ""
@@ -877,11 +1145,29 @@ function Invoke-PhaseFinish {
   Write-Host "    1. Open VS Code"
   Write-Host "    2. Ctrl+Shift+P"
   Write-Host "    3. Type: Remote-SSH: Connect to Host"
-  Write-Host "    4. Pick: $AmarelHost  (or type $AmarelUser@$AmarelHost)"
-  Write-Host "    5. Legacy CentOS 7 host only: click Allow on the 'OS unsupported' warning"
-  Write-Host "       the first time (RHEL 9 / amarel-new shows no such warning)"
-  Write-Host ""
-  Write-Host "  Status bar will show: SSH: $AmarelHost" -ForegroundColor Green
+  if ($ComputeSessionReady) {
+    Write-Host "    4. Pick: amarel-dev"
+    Write-Host "    5. Legacy CentOS 7 host only: click Allow on the 'OS unsupported' warning"
+    Write-Host "       the first time (RHEL 9 / amarel-new shows no such warning)"
+    Write-Host ""
+    Write-Host "  That lands you on a COMPUTE node. If no session is running, one is booked"
+    Write-Host "  for you and the connection waits a few seconds for it."
+    Write-Host ""
+    Write-Host "  The other entries are plumbing, not editor targets:"
+    Write-Host "    amarel-jump   a login node. amarel-dev hops through it."
+    Write-Host "    $AmarelHost   a login node. Your Amarel ~/.bash_profile now"
+    Write-Host "      refuses an editor server here, because that is what OARC objected to."
+    Write-Host ""
+    Write-Host "  Status bar will show: SSH: amarel-dev" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "  Manage the session: ssh amarel-jump bin/dev-session status | ensure | stop"
+  } else {
+    Write-Host "    4. Pick: $AmarelHost  (or type $AmarelUser@$AmarelHost)"
+    Write-Host "    5. Legacy CentOS 7 host only: click Allow on the 'OS unsupported' warning"
+    Write-Host "       the first time (RHEL 9 / amarel-new shows no such warning)"
+    Write-Host ""
+    Write-Host "  Status bar will show: SSH: $AmarelHost" -ForegroundColor Green
+  }
   Write-Host ""
 }
 
@@ -927,4 +1213,5 @@ if ($script:Platform -eq 'LEGACY') {
 Stop-TarballPrefetch -Mode kill   # discard any unconsumed prefetch (e.g. legacy hostname that probed NATIVE)
 
 Invoke-PhaseConfigureGit
+Invoke-PhaseComputeSession
 Invoke-PhaseFinish

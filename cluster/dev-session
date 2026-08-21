@@ -1,0 +1,243 @@
+#!/usr/bin/env bash
+# dev-session -- manage the Amarel compute-node dev session allocation.
+#
+# Installs to ~/bin/dev-session. Runs on a login node. It is what the
+# `amarel-vscode-setup` skill calls underneath, and it is the fallback when no
+# agent is available, so every subcommand has to read well in a plain terminal.
+#
+#   dev-session ensure    start one if not already running, then print the node
+#   dev-session status    what is running, and how long is left
+#   dev-session node      print just the node name
+#   dev-session stop      release the allocation now
+#
+# Deliberately NOT a background auto-renewer. A rolling allocation is the
+# behaviour OARC objected to on the login node, relocated. A job ends at
+# walltime or via `stop`, and nothing else ends it.
+#
+# ACCEPTED CONSEQUENCE, reaffirmed by the user: a forgotten job holds its cores
+# until walltime, up to three days. The session-length default in
+# ~/.amarel-dev.conf is therefore the only waste control there is.
+set -uo pipefail
+
+LIB="${AMAREL_DEV_LIB:-$HOME/bin/amarel-dev-lib}"
+if [ ! -r "$LIB" ]; then
+	echo "dev-session: cannot read $LIB. Re-run the Amarel setup to reinstall it." >&2
+	exit 1
+fi
+# shellcheck source=./amarel-dev-lib
+. "$LIB"
+adl_load_conf
+
+say() { printf '%s\n' "$*"; }
+
+require_partition() {
+	if [ -z "$ADL_PARTITION" ]; then
+		echo "dev-session: no partition set. Add AMAREL_DEV_PARTITION to $ADL_CONF" >&2
+		exit 1
+	fi
+}
+
+# --------------------------------------------------------------------------
+
+cmd_ensure() {
+	local job node spec why
+
+	node=$(adl_node)
+	if [ -n "$node" ]; then
+		say "already running on $node (job $(adl_job_running))"
+		return 0
+	fi
+
+	job=$(adl_job_any)
+	if [ -n "$job" ]; then
+		say "job $job is queued but not running yet; waiting..."
+	else
+		require_partition
+
+		if adl_maint_open; then
+			# shellcheck disable=SC2046  # deliberate split into $1 start, $2 end
+			set -- $(adl_maint_window)
+			echo "dev-session: maintenance window ${1:-} to ${2:-} is open, nothing can be scheduled." >&2
+			return 1
+		fi
+
+		IFS='|' read -r spec why <<<"$(adl_clamp_walltime "$ADL_WALLTIME" "$ADL_PARTITION")"
+		if [ -n "$why" ]; then
+			say "walltime $ADL_WALLTIME trimmed to $spec by $why"
+		fi
+
+		# The prototype never created this directory, so a missing one made
+		# sbatch fail in a way that read as a scheduler problem.
+		mkdir -p "$ADL_LOG_DIR" || {
+			echo "dev-session: cannot create log directory $ADL_LOG_DIR" >&2
+			return 1
+		}
+
+		# --time is always passed explicitly. Every Amarel partition has
+		# DefaultTime 00:02:00, so a job submitted without one dies after two
+		# minutes and the failure looks like the node rejected the connection.
+		job=$(sbatch --parsable \
+			-p "$ADL_PARTITION" \
+			-c "$ADL_CPUS" --mem="$ADL_MEM" --time="$spec" \
+			--job-name="$ADL_JOB_NAME" \
+			--output="$ADL_LOG_DIR/${ADL_JOB_NAME}-%j.log" \
+			--wrap 'sleep infinity') || {
+			echo "dev-session: sbatch failed" >&2
+			return 1
+		}
+		say "submitted job $job for $spec on $ADL_PARTITION"
+	fi
+
+	# Wait for it to start. The ssh alias cannot resolve a node until then.
+	for _ in $(seq 1 60); do
+		node=$(adl_node)
+		if [ -n "$node" ]; then
+			say "running on $node"
+			return 0
+		fi
+		sleep 5
+	done
+	echo "dev-session: job $job still not running after 5 minutes. Check: dev-session status" >&2
+	return 1
+}
+
+cmd_status() {
+	local job fields elapsed cpus left node state wins m lf lft lfm tier
+
+	# The last failed connect, first, because it is the reason the user is
+	# looking. The stderr line from a failing ProxyCommand is usually swallowed
+	# by ControlPersist, so this file is how the reason reaches anyone. See the
+	# header of amarel-dev-connect.
+	lf="$ADL_LOG_DIR/last-failure"
+	if [ -r "$lf" ]; then
+		IFS=$'\t' read -r lft lfm <"$lf"
+		say "last failed connect: $lft"
+		say "  $lfm"
+		say "  ask the skill to look into it, or see $ADL_LOG_DIR/connect.log"
+		say ""
+	fi
+
+	job=$(adl_job_running)
+	[ -n "$job" ] || job=$(adl_job_any)
+
+	if [ -z "$job" ]; then
+		say "amarel-dev: no session"
+		say "  run 'dev-session ensure', or just connect to amarel-dev and one is made for you"
+	else
+		fields=$(adl_job_fields "$job")
+		IFS='|' read -r elapsed cpus left node state <<<"$fields"
+		if [ "$state" = "RUNNING" ]; then
+			wins=$(adl_windows "$job")
+			say "amarel-dev: RUNNING on $node (job $job)"
+			say "  $cpus cores, $ADL_MEM       $elapsed elapsed, $left left"
+			say "  $wins window(s) connected"
+
+			# Issue #21 asked for this: when the job ends, the alias stops
+			# resolving and the editor fails to reconnect in a way that reads
+			# as a broken setup rather than an expired session. Nothing renews
+			# it, so the only defence is telling the user before it happens.
+			if [ "$(adl_tl_seconds "$left")" -lt 7200 ]; then
+				say ""
+				say "  ENDING SOON: under 2 hours left. Nothing renews it."
+				say "  Save your work. To start a fresh session now:"
+				say "    dev-session stop && dev-session ensure"
+			fi
+
+			# Every Amarel partition is PreemptMode=REQUEUE. On a low tier a
+			# higher-tier job can requeue this one with no warning, which the
+			# editor sees as a connection that simply died.
+			tier=$(adl_part_tier "$ADL_PARTITION")
+			if [ "$tier" -lt 40 ]; then
+				say ""
+				say "  PREEMPTIBLE: $ADL_PARTITION is PriorityTier=$tier."
+				say "  A higher-tier job can requeue this session with no warning."
+				say "  A lab partition (tier 40) is safer for long sessions."
+			fi
+		else
+			say "amarel-dev: $state (job $job)"
+			say "  waiting on: $(adl_pending_reason "$job")"
+		fi
+	fi
+
+	# Maintenance is shown always, because a click refuses during a window and
+	# the user should not meet that for the first time as a popup.
+	if adl_maint_open; then
+		# shellcheck disable=SC2046  # deliberate split into $1 start, $2 end
+		set -- $(adl_maint_window)
+		say "  maintenance: window ${1:-} to ${2:-} is OPEN, nothing can be scheduled"
+	else
+		m=$(adl_maint_next)
+		if [ -n "$m" ]; then
+			say "  maintenance: next window $(date -d "@$m" '+%Y-%m-%d %H:%M')"
+		fi
+	fi
+}
+
+cmd_node() { adl_node; }
+
+# `stop` is the only way a job ends early, so it carries two guards.
+#
+# 1. Refuse when any editor window is still attached. A second window is
+#    someone else's floor, and dev-session cannot tell which window is asking.
+# 2. Refuse when the job cgroup shows real CPU, because that means a
+#    computation is running. The cost of a false alarm is one flag; the cost of
+#    a miss is a lost computation. When the two sides are that lopsided, refuse
+#    by default.
+#
+# --force overrides both. On a terminal the CPU guard asks instead of refusing.
+CPU_BUSY_MS=200 # over a 3s sample. Idle measured 2.6ms/10s; real work is 100% of a core or more.
+
+cmd_stop() {
+	local force job wins busy ans
+	force=0
+	[ "${1:-}" = "--force" ] && force=1
+
+	job=$(adl_job_any)
+	if [ -z "$job" ]; then
+		say "nothing to stop"
+		return 0
+	fi
+
+	if [ "$force" -eq 0 ]; then
+		wins=$(adl_windows "$job")
+		if [ "$wins" != "?" ] && [ "$wins" -gt 0 ]; then
+			echo "dev-session: refusing to stop job $job, $wins editor window(s) still attached on $(adl_node)." >&2
+			echo "Close them first, or run: dev-session stop --force" >&2
+			return 1
+		fi
+
+		busy=$(adl_cpu_delta_ms "$job")
+		if [ "$busy" != "?" ] && [ "$busy" -gt "$CPU_BUSY_MS" ]; then
+			if [ -t 0 ]; then
+				printf 'Job %s is using CPU (%sms in 3s), so something is running. Stop it anyway? [y/N] ' "$job" "$busy"
+				read -r ans
+				case "$ans" in
+				y | Y | yes | YES) ;;
+				*)
+					say "left running"
+					return 1
+					;;
+				esac
+			else
+				echo "dev-session: refusing to stop job $job, it is using CPU (${busy}ms in 3s) so work is running." >&2
+				echo "If you are sure, run: dev-session stop --force" >&2
+				return 1
+			fi
+		fi
+	fi
+
+	scancel "$job" && say "cancelled job $job"
+}
+
+# --------------------------------------------------------------------------
+
+case "${1:-ensure}" in
+ensure) cmd_ensure ;;
+status) cmd_status ;;
+node) cmd_node ;;
+stop) cmd_stop "${2:-}" ;;
+*)
+	echo "usage: dev-session [ensure|status|node|stop [--force]]" >&2
+	exit 2
+	;;
+esac

@@ -1,0 +1,29 @@
+# ~/.amarel-dev.conf -- the only per-user file Phase 13 installs.
+#
+# Written by `setup.sh` Phase 13 from your answers, and safe to edit by hand.
+# Read by ~/bin/dev-session and ~/bin/amarel-dev-connect.
+#
+# Parsed as KEY=VALUE, one per line. It is NOT sourced as shell, so shell
+# syntax here does nothing. A value that fails validation is ignored with a
+# warning and the built-in default is used instead.
+
+# Partition to submit to. Detected at setup with `sbatch --test-only`, never
+# assumed. A lab partition if you have one, otherwise whichever general
+# partition would start soonest.
+AMAREL_DEV_PARTITION=main
+
+# Cores and memory for the session. These are held for the whole walltime
+# whether or not anyone is typing, so ask for what you use.
+AMAREL_DEV_CPUS=4
+AMAREL_DEV_MEM=16G
+
+# Default session length, in SLURM D-HH:MM:SS form. Used by lane 1, the click.
+# The request is clamped to the partition MaxTime and to one hour before the
+# next maintenance window, and you are told which clamp applied.
+#
+# A job submitted without an explicit --time dies after two minutes: every
+# partition on Amarel has DefaultTime 00:02:00. dev-session always passes one.
+AMAREL_DEV_WALLTIME=3-00:00:00
+
+# Where the holder job's SLURM output goes. Created if missing.
+AMAREL_DEV_LOG_DIR=/home/CHANGEME/.amarel-dev-logs

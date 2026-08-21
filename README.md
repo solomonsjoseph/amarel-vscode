@@ -194,13 +194,21 @@ Phase 0 of the skill detects your OS and confirms all of these automatically.
 | 7 | *(legacy CentOS 7 only)* Copy the tarball to Amarel, extract it, wire up `~/.bashrc` |
 | 8 | *(legacy CentOS 7 only)* Verify the glibc env vars load in a non-interactive SSH session |
 | 9 | *(legacy CentOS 7 only)* Write `"extensions.verifySignature": false` to VS Code Server's settings — needed only when the node binary is patched against the custom glibc |
-| 10 | Print the VS Code GUI steps — connect and you're done |
+| 13 | Install the `amarel-dev` compute-node session: a SLURM holder job, an SSH alias whose `ProxyCommand` resolves that job's node at connect time, and a login-node guard. **Runs before Phase 10**, because it decides which host you pick |
+| 10 | Print the VS Code GUI steps — connect to `amarel-dev` and you're done |
 | 11 | Point VS Code at a modern git on Amarel (`git.path`) so Source Control detects your repos — needed on legacy CentOS 7 (stock git 1.8.3.1); on RHEL 9.6 the system git ~2.43 already passes, so nothing is written |
 | 12 | *(Optional)* Authenticate GitHub on Amarel (`gh auth login`) and set your git identity, so commits and pushes work |
 
-After Phase 10: **VS Code → Remote-SSH: Connect to Host → `amarel-new.hpc.rutgers.edu`**
-(or the legacy `amarel.rutgers.edu` during the transition). Then, once connected,
-Phase 11 fixes Source Control and the optional Phase 12 sets up GitHub.
+After Phase 10: **VS Code → Remote-SSH: Connect to Host → `amarel-dev`**. That lands
+you on a **compute node**, which is what Rutgers OARC requires; if no session is
+running, one is booked for you and the connection waits a few seconds for it. The
+`amarel-jump` and `amarel-new.hpc.rutgers.edu` entries in the same menu are login
+nodes and are not editor targets. Then, once connected, Phase 11 fixes Source
+Control and the optional Phase 12 sets up GitHub.
+
+Manage the session afterwards with `dev-session status`, `dev-session ensure` or
+`dev-session stop` on Amarel, or just ask the skill ("stop my amarel job", "how much
+time is left").
 
 ---
 
@@ -216,6 +224,15 @@ Phase 11 fixes Source Control and the optional Phase 12 sets up GitHub.
 | Extension install fails (`signature verification failed`) | On legacy CentOS 7, Phase 9 handles this and is idempotent — re-run from Phase 9. On RHEL 9.6 it's rare; merge `"extensions.verifySignature": false` into `~/.vscode-server/data/Machine/settings.json` by hand. |
 | Host fingerprint doesn't match OARC's published value | **Stop immediately. Possible MITM attack. Contact OARC.** |
 | Source Control shows "no Git repository" / "Initialize Repository" on a real clone | VS Code Server is using CentOS 7's git 1.8.3.1, too old for its repo probe. Phase 11 sets `git.path` to a modern git in the remote Machine settings (on Amarel, `module use /projects/community/modulefiles` then `module load git` — the git modules aren't on the default `MODULEPATH`), then self-tests that VS Code will detect repos; `setup.sh` / `setup.ps1` apply and self-test it automatically. **On RHEL 9.6 (amarel-new) the system git (~2.43) already passes the probe, so Phase 11 writes nothing.** Deep dive: [docs/source-control-git-fix.md](docs/source-control-git-fix.md). |
+| VS Code connects but you're on `amarel3` / `amarel4` | You picked a login-node entry. Reconnect and pick **`amarel-dev`**. |
+| `amarel-dev: maintenance until <time>, cannot schedule.` | The cluster is in a maintenance reservation. This is the one legitimate refusal. Wait for the window to end. |
+| `amarel-dev: job NNNN is queued (Resources) and has not started.` | A normal queue wait. Try again shortly, or set a shorter `AMAREL_DEV_WALLTIME` in `~/.amarel-dev.conf` so the job fits into a gap. |
+| The `amarel-dev` connect hangs, then VS Code gives up | Read the cluster-side log at `~/.amarel-dev-logs/connect.log`, then run `ssh amarel-jump bin/amarel-dev-connect --selftest`. |
+| `Connection closed by UNKNOWN port 65535` and nothing else | Expected. OpenSSH discards a detached master's stderr when `ControlPersist` is set, so the reason never reaches the popup. It is written to `~/.amarel-dev-logs/last-failure` and printed by `dev-session status`. `ssh -v amarel-dev` shows the live line. Easiest route: tell the skill "amarel-dev failed, find out why" and it diagnoses, fixes and files a report. |
+| `REFUSED: this is an Amarel login node.` | Working as designed. The guard stops an editor server on a login node. Connect to `amarel-dev` instead. Do not delete the guard. |
+| Your session vanished mid-work on a general partition | Every Amarel partition is `PreemptMode=REQUEUE`. On a low `PriorityTier` a higher-tier job can requeue yours with no warning. Setup prefers a lab partition, then the highest-tier general one, and `dev-session status` keeps warning you while you are on a preemptible one. A group-owned partition is the real fix. |
+| The first connect to a compute node is slow | Expected, once. `~/.vscode-server` lives on shared home, so the first connection to a node you have not used bootstraps the server there. Later connects are under a second. |
+| Your session ended and nothing warned you | `dev-session status` warns once under two hours remain. There is no auto-renew by design; a rolling allocation is what OARC objected to. A job ends at its walltime or via `dev-session stop`. Reconnecting books a new one. There is no duration limit, but the cores are held for the whole walltime whether or not you are typing, so ask for the shortest block that covers your work. Starting a new session is one click. |
 | Push rejected with `GH007` | Only happens when GitHub's "Keep my email address private" is on. Use your no-reply email (safe on any account), then re-stamp the commit: `git config --global user.email <id>+<user>@users.noreply.github.com && git commit --amend --reset-author --no-edit`, then push. Phase 12 covers GitHub auth + identity for both private and non-private accounts. |
 
 ---
@@ -234,6 +251,15 @@ Your credentials never enter the LLM's process:
 The skill is forbidden from using `sshpass`, `expect`, `security find-generic-password`, or any other helper that could pipe a secret through the LLM's process. After Phase 5, all SSH/SCP calls use `BatchMode=yes` — if key auth fails they error loudly rather than silently prompting for a password.
 
 The sysroot tarball is SHA-256 pinned in `assets/checksums.txt` and verified before extraction. Builds are reproducible via Docker (`scripts/build-sysroot.sh`).
+
+Phase 13 (the compute-node session) adds no credentials of its own. Everything it
+installs lives under your own `$HOME` on Amarel: nothing shared, nothing privileged,
+nothing setuid. `~/.amarel-dev.conf` is parsed as `KEY=VALUE` and never sourced as
+shell, and every value is whitelist-validated before it reaches an `sbatch` command
+line. There is no background keepalive and no auto-renew, so every allocation traces
+back to something you did. Walltime is requested honestly and clamped to the
+partition limit and the next maintenance window; any automatic adjustment can only
+shorten a job, never extend one.
 
 ---
 

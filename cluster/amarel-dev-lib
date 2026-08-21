@@ -1,0 +1,367 @@
+#!/usr/bin/env bash
+# amarel-dev-lib -- shared helpers for `dev-session` and `amarel-dev-connect`.
+#
+# Sourced, never executed. Installs to ~/bin/amarel-dev-lib.
+#
+# Before this file the walltime rule existed three times in three languages
+# (awk in dev-session, grep+sed in amarel-dev-proxy, embedded python in
+# amarel-maint) and the three disagreed below one hour. One copy lives here and
+# the behaviour is: clamp up to one hour and let SLURM decide.
+#
+# Every function writes diagnostics to stderr. Nothing here writes to stdout
+# except the functions documented as printing a value, because
+# `amarel-dev-connect` runs as an SSH ProxyCommand where stdout IS the tunnel
+# and stray output can corrupt the handshake. See amarel-dev-connect's header
+# for exactly which stray output is tolerated and which is not.
+
+# --------------------------------------------------------------------------
+# Configuration
+# --------------------------------------------------------------------------
+# ~/.amarel-dev.conf is the only per-user file. It is parsed as KEY=VALUE with
+# a fixed key whitelist, NOT sourced: sourcing would run whatever is in it as
+# shell, and every value below ends up on an sbatch command line.
+
+ADL_CONF="${ADL_CONF:-$HOME/.amarel-dev.conf}"
+
+ADL_JOB_NAME=amarel-dev
+
+# Defaults, overridden by the conf file when it is present and valid.
+ADL_PARTITION=""
+ADL_CPUS=4
+ADL_MEM=16G
+ADL_WALLTIME=3-00:00:00
+ADL_LOG_DIR="$HOME/.amarel-dev-logs"
+
+adl_warn() { printf '%s\n' "$*" >&2; }
+
+# SC2034: the ADL_* settings below are read by dev-session and amarel-dev-connect,
+# which source this file. shellcheck cannot see across that boundary.
+# shellcheck disable=SC2034
+adl_load_conf() {
+	local line key val
+
+	[ -r "$ADL_CONF" ] || return 0
+
+	while IFS= read -r line; do
+		case "$line" in
+		'' | '#'*) continue ;;
+		esac
+		key="${line%%=*}"
+		val="${line#*=}"
+		[ "$key" = "$line" ] && continue
+		# Strip surrounding whitespace and one layer of quotes.
+		key="$(printf '%s' "$key" | tr -d '[:space:]')"
+		val="${val#"${val%%[![:space:]]*}"}"
+		val="${val%"${val##*[![:space:]]}"}"
+		case "$val" in
+		\"*\") val="${val#\"}" && val="${val%\"}" ;;
+		\'*\') val="${val#\'}" && val="${val%\'}" ;;
+		esac
+
+		case "$key" in
+		AMAREL_DEV_PARTITION)
+			if adl_valid_name "$val"; then ADL_PARTITION="$val"; else
+				adl_warn "amarel-dev: ignoring bad AMAREL_DEV_PARTITION in $ADL_CONF"
+			fi
+			;;
+		AMAREL_DEV_CPUS)
+			if [ -n "$val" ] && [ -z "${val//[0-9]/}" ] && [ "$val" -ge 1 ] 2>/dev/null; then
+				ADL_CPUS="$val"
+			else
+				adl_warn "amarel-dev: ignoring bad AMAREL_DEV_CPUS in $ADL_CONF"
+			fi
+			;;
+		AMAREL_DEV_MEM)
+			if printf '%s' "$val" | grep -Eq '^[0-9]+[KMGT]?$'; then ADL_MEM="$val"; else
+				adl_warn "amarel-dev: ignoring bad AMAREL_DEV_MEM in $ADL_CONF"
+			fi
+			;;
+		AMAREL_DEV_WALLTIME)
+			if adl_valid_timespec "$val"; then ADL_WALLTIME="$val"; else
+				adl_warn "amarel-dev: ignoring bad AMAREL_DEV_WALLTIME in $ADL_CONF"
+			fi
+			;;
+		AMAREL_DEV_LOG_DIR)
+			if adl_valid_path "$val"; then ADL_LOG_DIR="$val"; else
+				adl_warn "amarel-dev: ignoring bad AMAREL_DEV_LOG_DIR in $ADL_CONF"
+			fi
+			;;
+		*) : ;; # unknown keys are ignored on purpose, so a newer conf is readable
+		esac
+	done <"$ADL_CONF"
+}
+
+# Input validation. Everything that reaches an sbatch argument passes one of
+# these first.
+adl_valid_name() { printf '%s' "${1:-}" | grep -Eq '^[A-Za-z0-9_.,+-]+$'; }
+adl_valid_path() { case "${1:-}" in /*) printf '%s' "$1" | grep -Eqv '[[:space:]$`"'"'"'\\]' ;; *) false ;; esac; }
+adl_valid_timespec() { printf '%s' "${1:-}" | grep -Eq '^([0-9]+-)?[0-9]{1,2}(:[0-9]{2}){0,2}$'; }
+
+# --------------------------------------------------------------------------
+# Time arithmetic
+# --------------------------------------------------------------------------
+
+# Seconds in a SLURM time spec. UNLIMITED and anything unparseable return a
+# number large enough to lose every min() comparison, which is the safe
+# direction: a bad read can only make the request shorter, never longer.
+#
+# THE DASH CHANGES WHAT THE FIRST FIELD MEANS. SLURM accepts six forms and they
+# do not share one rule:
+#
+#   no dash:  MM        MM:SS        HH:MM:SS
+#   dash:     D-HH      D-HH:MM      D-HH:MM:SS
+#
+# So `1-12` is one day twelve HOURS while `12` is twelve MINUTES. Reading the
+# post-dash part with the dashless rule turns `1-12` into 1d 12m, a silent
+# 11.8-hour shortfall on a value a user is allowed to write in the conf file.
+# The prototype had this wrong in all three of its copies; this is the one
+# place it now lives.
+adl_tl_seconds() {
+	local s d hms dash
+	s="${1:-}"
+	case "$s" in
+	UNLIMITED | INFINITE | INVALID | NOT_SET | "") echo 999999999; return 0 ;;
+	esac
+	d=0
+	hms="$s"
+	dash=0
+	case "$s" in
+	*-*)
+		d="${s%%-*}"
+		hms="${s#*-}"
+		dash=1
+		;;
+	esac
+	echo "$hms" | awk -F: -v d="$d" -v dash="$dash" '{
+		if (NF==3)      print d*86400 + $1*3600 + $2*60 + $3;
+		else if (NF==2) print d*86400 + (dash ? $1*3600 + $2*60 : $1*60 + $2);
+		else            print d*86400 + (dash ? $1*3600         : $1*60);
+	}'
+}
+
+# Seconds -> D-HH:MM:SS, the form sbatch and scontrol both accept.
+adl_spec_from_seconds() {
+	local sec="${1:-0}"
+	printf '%d-%02d:%02d:00' $((sec / 86400)) $((sec % 86400 / 3600)) $((sec % 3600 / 60))
+}
+
+# --------------------------------------------------------------------------
+# Cluster facts, read live
+# --------------------------------------------------------------------------
+
+# Epoch of the next MAINT reservation start still in the future, or empty.
+#
+# KEYED ON Flags CONTAINING MAINT, never on the reservation name and never on
+# "is any reservation active". Measured 2026-08-21:
+#   maintenance-202609    Flags=MAINT,SPEC_NODES,ALL_NODES   663 nodes  INACTIVE
+#   oarc-tech/issues/65   Flags=SPEC_NODES                     1 node   ACTIVE
+# The naive "any active reservation" test matches the second one, which runs to
+# 2027-07-31, and would make every connection refuse for eleven months.
+adl_maint_next() {
+	local now next
+	now=$(date +%s)
+	next=$(scontrol show res -o 2>/dev/null |
+		awk '/Flags=[^ ]*MAINT/ {for(i=1;i<=NF;i++) if($i ~ /^StartTime=/) {sub(/^StartTime=/,"",$i); print $i}}' |
+		while read -r t; do date -d "$t" +%s 2>/dev/null; done |
+		awk -v n="$now" '$1 > n' | sort -n | head -1)
+	printf '%s' "$next"
+}
+
+# True while a MAINT reservation is open right now.
+adl_maint_open() {
+	local now
+	now=$(date +%s)
+	scontrol show res -o 2>/dev/null |
+		awk '/Flags=[^ ]*MAINT/ {
+			s=""; e="";
+			for(i=1;i<=NF;i++) {
+				if($i ~ /^StartTime=/) {sub(/^StartTime=/,"",$i); s=$i}
+				if($i ~ /^EndTime=/)   {sub(/^EndTime=/,"",$i);   e=$i}
+			}
+			if (s != "" && e != "") print s, e
+		}' |
+		while read -r s e; do
+			local ss ee
+			ss=$(date -d "$s" +%s 2>/dev/null) || continue
+			ee=$(date -d "$e" +%s 2>/dev/null) || continue
+			if [ "$now" -ge "$ss" ] && [ "$now" -lt "$ee" ]; then
+				printf '%s %s\n' "$s" "$e"
+				return 0
+			fi
+		done | grep -q .
+}
+
+# Human dates of the open window, for the one-line refusal message.
+adl_maint_window() {
+	scontrol show res -o 2>/dev/null |
+		awk '/Flags=[^ ]*MAINT/ {
+			s=""; e="";
+			for(i=1;i<=NF;i++) {
+				if($i ~ /^StartTime=/) {sub(/^StartTime=/,"",$i); s=$i}
+				if($i ~ /^EndTime=/)   {sub(/^EndTime=/,"",$i);   e=$i}
+			}
+			if (s != "" && e != "") print s, e
+		}' | sort | head -1
+}
+
+# Partition MaxTime in seconds, read from sinfo. NEVER hardcode this: the
+# prototype's "14 days" is true for one lab partition (p_wj183_1) and false for
+# everyone else. Measured 2026-08-21: 3-00:00:00 on main/cmain/mem/gpu/cgpu/
+# cmem/nonpre, 1-00:00:00 on graphical, 14-00:00:00 on p_wj183_1.
+adl_part_maxtime() {
+	local p spec
+	p="${1:-$ADL_PARTITION}"
+	[ -n "$p" ] || { echo 999999999; return 0; }
+	spec=$(sinfo -h -p "$p" -o '%l' 2>/dev/null | head -1 | tr -d '[:space:]')
+	adl_tl_seconds "$spec"
+}
+
+# PREEMPTION RISK. Every Amarel partition is PreemptMode=REQUEUE, verified
+# 2026-08-21, so what decides whether a session can be destroyed under you is
+# PriorityTier: a job can be preempted by one from a HIGHER tier. Measured the
+# same day:
+#     main, cmain, nonpre   PriorityTier=10   most exposed
+#     cmem                  PriorityTier=20
+#     graphical, p_wj183_1  PriorityTier=40   a lab partition, much safer
+# A requeued dev session dies with no warning and the editor sees a dropped
+# connection. This is why the setup offers a lab partition first, and why a low
+# tier is called out rather than silently accepted.
+adl_part_tier() {
+	local p tier
+	p="${1:-$ADL_PARTITION}"
+	[ -n "$p" ] || { echo 0; return 0; }
+	tier=$(scontrol show partition "$p" 2>/dev/null |
+		tr ' ' '\n' | awk -F= '/^PriorityTier=/{print $2; exit}')
+	printf '%s' "${tier:-0}"
+}
+
+# --------------------------------------------------------------------------
+# The walltime rule. One copy, this one.
+# --------------------------------------------------------------------------
+# Prints `SPEC|REASON` for min(requested, partition MaxTime, next MAINT start
+# minus one hour). REASON names the binding limit, or is empty when the request
+# went through untouched, so the caller can tell the user which clamp applied.
+#
+# THE REASON RIDES ON STDOUT, it is not a variable. An earlier version set
+# ADL_CLAMP_REASON and every caller read it back empty: the function is always
+# used as `spec=$(adl_clamp_walltime ...)`, which runs it in a subshell, so the
+# assignment never reaches the caller. Split the output instead:
+#
+#     IFS='|' read -r spec why <<<"$(adl_clamp_walltime "$want" "$part")"
+#
+# SLURM plans by a job's END time, so a request that would still be running
+# when a MAINT reservation opens never starts at all: it sits PENDING with
+# "(ReqNodeNotAvail, Reserved for maintenance)" until after the window. On the
+# general partitions MaxTime equals the 3-day default exactly, so the trim path
+# runs for the three days before every window. It is normal, not an edge case.
+#
+# Below one hour of runway we still ask for one hour rather than refusing, and
+# let SLURM make the call. The three prototype copies disagreed here; this is
+# the behaviour that was chosen.
+ADL_MARGIN=3600
+ADL_MIN_WALL=3600
+
+adl_clamp_walltime() {
+	local req_spec partition req sec maxt m now avail why
+	req_spec="${1:-$ADL_WALLTIME}"
+	partition="${2:-$ADL_PARTITION}"
+
+	why=""
+	req=$(adl_tl_seconds "$req_spec")
+	sec="$req"
+
+	maxt=$(adl_part_maxtime "$partition")
+	if [ "$maxt" -lt "$sec" ]; then
+		sec="$maxt"
+		why="the ${partition} partition MaxTime"
+	fi
+
+	m=$(adl_maint_next)
+	if [ -n "$m" ]; then
+		now=$(date +%s)
+		avail=$((m - now - ADL_MARGIN))
+		if [ "$avail" -lt "$sec" ]; then
+			sec="$avail"
+			why="the next maintenance window"
+		fi
+	fi
+
+	if [ "$sec" -lt "$ADL_MIN_WALL" ]; then
+		sec="$ADL_MIN_WALL"
+		why="the one hour minimum"
+	fi
+
+	printf '%s|%s\n' "$(adl_spec_from_seconds "$sec")" "$why"
+}
+
+# --------------------------------------------------------------------------
+# Job lookup
+# --------------------------------------------------------------------------
+# `squeue -n amarel-dev` matches ANY job with that name, including one someone
+# submitted by hand. Prefer the newest, which is the highest job id.
+
+adl_job_running() { squeue -h -u "$USER" -n "$ADL_JOB_NAME" -t R -o '%i' 2>/dev/null | sort -rn | head -1; }
+# STATE FILTER IS LOAD-BEARING. `squeue -n amarel-dev` with no -t also matches a
+# job that is already dying: for a few seconds after scancel the job stays
+# visible in state COMPLETING (measured 2026-08-21: visible at +3s, gone by
+# +6s). Without the filter, `dev-session ensure` saw that corpse, decided a job
+# already existed, and waited five minutes for it to start. The connect's
+# `timeout 120` killed it first, so a stop-then-reconnect failed after two
+# minutes with nothing provisioned. That is exactly what "restart my session"
+# does, and it failed on 2 of 4 cold cycles before this filter existed.
+# PD, R and CF are the only states a job can still become RUNNING from.
+adl_job_any() { squeue -h -u "$USER" -n "$ADL_JOB_NAME" -t PD,R,CF -o '%i' 2>/dev/null | sort -rn | head -1; }
+adl_job_pending() { squeue -h -u "$USER" -n "$ADL_JOB_NAME" -t PD -o '%i' 2>/dev/null | sort -rn | head -1; }
+adl_pending_reason() { squeue -h -j "${1:?}" -o '%R' 2>/dev/null | head -1; }
+adl_node() { squeue -h -u "$USER" -n "$ADL_JOB_NAME" -t R -o '%i %N' 2>/dev/null | sort -rn | head -1 | awk '{print $2}'; }
+
+# Elapsed, cores, time remaining, node, state for one job, pipe separated.
+adl_job_fields() { squeue -h -j "${1:?}" -o '%M|%C|%L|%N|%T' 2>/dev/null | head -1; }
+
+# --------------------------------------------------------------------------
+# Probing the compute node from the login node
+# --------------------------------------------------------------------------
+# dev-session runs on a login node; the sessions and the cgroup live on the
+# compute node. `srun --jobid=N --overlap` runs inside the existing allocation
+# without creating a login session of its own, so it does not perturb the
+# thing it measures.
+
+# Count of editor windows attached. Adopted SSH sessions appear as
+# `sshd: user@notty`. Prints a number, or "?" if the probe could not run.
+adl_windows() {
+	local job out
+	job="${1:?}"
+	out=$(srun --jobid="$job" --overlap -n1 --time=1 \
+		bash -c 'pgrep -u "$USER" -f "sshd.*@notty" | wc -l' 2>/dev/null | tr -d '[:space:]')
+	# pgrep exits non-zero on a zero count, so the count is taken from wc, never
+	# from `pgrep -c`. `$(pgrep -c x || echo 0)` yields the string "0 0".
+	case "$out" in
+	'' | *[!0-9]*) printf '?' ;;
+	*) printf '%s' "$out" ;;
+	esac
+}
+
+# CPU used by the job over a short sample, in milliseconds. Used only to decide
+# whether `stop` should ask for confirmation.
+#
+# cgroup v1, PrologFlags=Alloc,Contain,X11. Adopted SSH sessions land in
+# step_extern; the job-level cgroup.procs is empty even with processes running,
+# so the counter has to be read at the job level and the processes found one
+# level down. Measured 2026-08-20: idle 2.6ms over 10s against 100% of a core
+# or more for real work, roughly a 4000x gap, so any threshold in between
+# works. Prints a number, or "?" if the probe could not run.
+adl_cpu_delta_ms() {
+	local job out
+	job="${1:?}"
+	out=$(srun --jobid="$job" --overlap -n1 --time=1 bash -c '
+		f=$(find /sys/fs/cgroup/cpu,cpuacct -maxdepth 4 -name cpuacct.usage \
+		    -path "*job_'"$job"'*" 2>/dev/null | head -1)
+		[ -n "$f" ] || exit 1
+		a=$(cat "$f"); sleep 3; b=$(cat "$f")
+		echo $(( (b - a) / 1000000 ))
+	' 2>/dev/null | tr -d '[:space:]')
+	case "$out" in
+	'' | *[!0-9]*) printf '?' ;;
+	*) printf '%s' "$out" ;;
+	esac
+}

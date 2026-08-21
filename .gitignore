@@ -21,3 +21,6 @@ Thumbs.db
 *.pem
 id_rsa
 id_ed25519
+
+# Python bytecode from scripts/devmode_verify.py
+__pycache__/
