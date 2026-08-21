@@ -22,11 +22,14 @@ description: |
   itself, applies the fix, verifies it, and files a GitHub issue recording what
   happened so the cause gets fixed properly.
 
-  The same lane covers any other problem, named or not: something is broken, it
-  stopped working, this used to work, I don't know what's wrong, it's acting
-  weird. The skill asks what happened, reproduces it, fixes it, has the user
-  confirm, then records the whole thing as an issue so the next person never
-  hits it. It does not turn a problem away for not being on a list.
+  The same lane covers any other problem, named or not, and a vague report is
+  the normal way it arrives: it's not working, it isn't working, this doesn't
+  work, something is broken, it stopped working, this used to work, I don't
+  know what's wrong, it's acting weird, help. Route on that alone. The skill
+  asks what happened, reproduces it, fixes it, has the user confirm, then
+  records the whole thing as an issue so the next person never hits it. It does
+  not turn a problem away for not being on a list, and it does not need the
+  user to name the fault first.
 
   The repo owner can also open a dev mode that works on the skill itself and
   closes its untested list. It is off by default and opens only on one exact
