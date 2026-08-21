@@ -282,7 +282,16 @@ adl_clamp_walltime() {
 # submitted by hand. Prefer the newest, which is the highest job id.
 
 adl_job_running() { squeue -h -u "$USER" -n "$ADL_JOB_NAME" -t R -o '%i' 2>/dev/null | sort -rn | head -1; }
-adl_job_any() { squeue -h -u "$USER" -n "$ADL_JOB_NAME" -o '%i' 2>/dev/null | sort -rn | head -1; }
+# STATE FILTER IS LOAD-BEARING. `squeue -n amarel-dev` with no -t also matches a
+# job that is already dying: for a few seconds after scancel the job stays
+# visible in state COMPLETING (measured 2026-08-21: visible at +3s, gone by
+# +6s). Without the filter, `dev-session ensure` saw that corpse, decided a job
+# already existed, and waited five minutes for it to start. The connect's
+# `timeout 120` killed it first, so a stop-then-reconnect failed after two
+# minutes with nothing provisioned. That is exactly what "restart my session"
+# does, and it failed on 2 of 4 cold cycles before this filter existed.
+# PD, R and CF are the only states a job can still become RUNNING from.
+adl_job_any() { squeue -h -u "$USER" -n "$ADL_JOB_NAME" -t PD,R,CF -o '%i' 2>/dev/null | sort -rn | head -1; }
 adl_job_pending() { squeue -h -u "$USER" -n "$ADL_JOB_NAME" -t PD -o '%i' 2>/dev/null | sort -rn | head -1; }
 adl_pending_reason() { squeue -h -j "${1:?}" -o '%R' 2>/dev/null | head -1; }
 adl_node() { squeue -h -u "$USER" -n "$ADL_JOB_NAME" -t R -o '%i %N' 2>/dev/null | sort -rn | head -1 | awk '{print $2}'; }
