@@ -996,8 +996,22 @@ phase_compute_session() {
     # Partition access is DETECTED, never assumed. `sbatch --test-only` predicts
     # a start time and a node without submitting anything.
     say "  Checking which partitions you can submit to…"
-    local probe
-    probe="$(ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" 'bash -se' <<'REMOTE' 2>/dev/null || true
+    # THE HEREDOC IS READ INTO A VARIABLE FIRST, DELIBERATELY. Do not "simplify"
+    # this back to a heredoc inside $( ), i.e.
+    #     probe="$(ssh ... 'bash -se' <<'REMOTE' ... REMOTE
+    #     )"
+    # macOS ships bash 3.2.57 as /bin/bash, which is what `#!/usr/bin/env bash`
+    # resolves to on a stock Mac. Bash 3.2 mis-parses a quoted heredoc inside a
+    # command substitution when the body contains unbalanced ")" characters: the
+    # `case ... p_*)` patterns below supply exactly that, the scanner loses the
+    # heredoc boundary, and it expands the body LOCALLY. Under `set -euo
+    # pipefail` that aborts the whole installer with
+    #     setup.sh: line NNNN: out: unbound variable
+    # Measured 2026-08-21 on bash 3.2.57(1)-release (arm64-apple-darwin25).
+    # Bash 5 parses it correctly, so this fails only for users without a newer
+    # bash, which is most Mac users.
+    local probe remote_script
+    IFS= read -r -d '' remote_script <<'REMOTE' || true
 set -uo pipefail
 for p in $(sinfo -h -o '%R' | sort -u); do
   out=$(sbatch --test-only -p "$p" -c 4 --mem=16G --time=1-00:00:00 \
@@ -1009,7 +1023,8 @@ for p in $(sinfo -h -o '%R' | sort -u); do
   printf '%s %s %s\n' "$p" "$e" "$lab"
 done | sort -k2,2n
 REMOTE
-)"
+    probe="$(printf '%s' "$remote_script" |
+      ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" 'bash -se' 2>/dev/null || true)"
     local lab_part general_part
     lab_part="$(printf '%s\n' "$probe"     | awk '$3=="lab"     {print $1; exit}')"
     general_part="$(printf '%s\n' "$probe" | awk '$3=="general" {print $1; exit}')"
