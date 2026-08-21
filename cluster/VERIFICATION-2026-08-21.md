@@ -69,7 +69,7 @@ Numbering follows the plan.
 |---|---|---|
 | 1 | `setup.sh` Phase 13 writes both blocks | PENDING, stage 2. Installed by hand today |
 | 2 | `ssh amarel-dev hostname` returns a compute node | PASS. gpuk012, then gpuk008, never amarel3/4 |
-| 3 | Cold path provisions unaided | PASS from the CLI in 6.7s. One deliberate Remote Window click still owed |
+| 3 | Cold path provisions unaided | PASS. CLI 6.7s, and a deliberate Remote Window click landed on gpuk008 at 10:59 |
 | 4 | Stale master | PASS. Broken pipe, fallback, new job, 10.5s |
 | 5 | Dirty shell refusal | PENDING, stage 2. The gate itself reads 0 bytes today |
 | 6 | Maintenance refusal | PENDING, needs the 2026-09-15 window |
@@ -77,7 +77,7 @@ Numbering follows the plan.
 | 8 | Generic partition | PASS. main, hal0198, TIME_LIMIT 3-00:00:00 from sinfo |
 | 9 | Source Control on a compute node | PASS in part. git 2.55.0 resolves and runs on gpuk008 |
 | 10 | Session length question | PENDING, stage 2, skill lane |
-| 11 | Windows | PENDING, no machine available |
+| 11 | Windows | DEFERRED by the user on 2026-08-21, after the macOS path is finished |
 | 12 | Where the stderr line appears | PENDING, needs 2026-09-15 |
 | 13 | Reset removes everything | PENDING, stage 2 |
 
@@ -90,7 +90,11 @@ cold, after full job teardown   10.47s  -> gpuk008, job 60724755, stale master b
 editor's own reconnect          ~3s     -> gpuk008, job 60724744, no human action
 ```
 
-The last line matters: job `60690397` was force-stopped at 10:47 and the editor
+The Remote Window click itself, run by the user at 10:59 on 2026-08-21,
+landed on gpuk008. That closes item 3 and the plan's success criterion for the
+macOS path.
+
+The editor-reconnect line matters too: job `60690397` was force-stopped at 10:47 and the editor
 reconnected through the new `amarel-dev-connect` and provisioned `60724744`
 within three seconds, with nobody clicking anything. That is lane 1 working
 end to end through the repo version, and it repeats the 2026-08-21 prototype
