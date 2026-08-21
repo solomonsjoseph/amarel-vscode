@@ -2886,6 +2886,7 @@ keeps stderr attached. Use it when the evidence above is inconclusive.
 | The `wc -c` probe is non-zero | A chatty `~/.bashrc` | Apply the 13.1 fix. |
 | Connect hangs then dies near 300s | Provisioning exceeded the editor's ceiling | Check the queue. A shorter walltime usually starts sooner. |
 | Status healthy, connect still fails | Often a stale control socket | `ssh -O exit amarel-dev`, then retry. |
+| **Nothing above matches** | Unknown | Do not stop here and do not tell the user you cannot help. Go to **"When something breaks and it is not in any table"** below and work it from first principles. An unmatched cause is the most valuable kind to record, because it is the one the repo does not know about yet. |
 
 Apply the fix yourself where the table says so. **Never** disable the
 login-node guard, widen the stdout gate, or add a retry loop to work around a
@@ -2901,11 +2902,24 @@ ssh -o BatchMode=yes -o ConnectTimeout=300 amarel-dev hostname -s
 A compute node name is a pass. `amarel3` or `amarel4` is a failure. Do not tell
 the user it is fixed until this returns a compute node.
 
+#### Step 3b, ask the user to confirm
+
+The machine check is necessary and not sufficient. It proves a compute node
+answers an SSH command. It does not prove the user's editor opens, which is the
+thing they actually asked for. Tell them what you changed and ask them to try
+the connection themselves.
+
+**Wait for their answer before step 4.** If they say it is still broken, that is
+new evidence, not a contradiction: go back to step 1 with what they tell you.
+The fix was wrong or incomplete, and an issue filed now would record a false
+cause.
+
 #### Step 4, file the report
 
-**Only when you actually applied a fix and step 3 passed.** A maintenance
-window is not a defect, and neither is an ordinary queue wait that cleared on
-its own. Filing those trains the repo to ignore its own issues.
+**Only when you applied a fix, step 3 passed, and the user confirmed it works.**
+All three. A maintenance window is not a defect, and neither is an ordinary
+queue wait that cleared on its own. Filing those trains the repo to ignore its
+own issues.
 
 Check for a duplicate first, and never file a second issue for a cause already
 recorded:
@@ -3052,6 +3066,102 @@ If the user reports their password was leaked or something looks suspicious,
 stop and tell them to rotate their Amarel password via Rutgers OARC.
 
 ---
+
+## When something breaks and it is not in any table
+
+Section 13.10 handles the one failure this repo has seen most, the `amarel-dev`
+connect. This section handles everything else: a user who says something is
+wrong and neither they nor you have a name for it yet.
+
+**Never answer with a version of "that is not something I handle."** The repo
+learns only from problems that get worked and written down. A problem you turn
+away is a problem it will meet again, in exactly the same shape, with exactly
+the same person.
+
+### Step 1, ask what happened, in their words
+
+Unlike 13.10, where the popup is genuinely empty and asking would waste the
+user's time, here the user is usually the only witness. Ask, and ask concretely:
+
+- What were you doing when it broke, and what did you expect instead?
+- What exactly did you see? Paste it if you can, or describe it.
+- Was it working before? What changed between then and now?
+- Does it happen every time, or only sometimes?
+
+Ask all of it in one message. Do not interrogate them one question at a time.
+If they cannot answer some of it, work with what you get.
+
+### Step 2, reproduce before you theorise
+
+Get the failure to happen where you can watch it. A problem you cannot reproduce
+is a problem you cannot honestly claim to have fixed. Gather read-only evidence
+first, following the pattern in 13.10 step 1: state, logs, a self-test, the
+environment. Prefer commands that show you what **is** over commands that change
+what is.
+
+If you cannot reproduce it, say so plainly and keep going on the user's evidence
+alone. Say in the eventual issue that it was not reproduced.
+
+### Step 3, fix it
+
+Change one thing at a time, so you know which change was the one that worked.
+Prefer a real repair to a workaround, and when you can only manage a workaround,
+call it a workaround out loud, both to the user and in the issue.
+
+The constraints do not bend for a hard problem. Everything under **Security
+constraints** still binds, the login-node guard stays on, the stdout gate stays
+shut, and no retry loop gets added to paper over a failure. If the only fix you
+can find needs one of those switched off, you have found a design problem, and
+that is the finding to report.
+
+Confirm before anything destructive on the user's account or machine.
+
+### Step 4, verify, then ask the user to confirm
+
+Verify mechanically first, the way 13.10 step 3 does: a command whose output
+distinguishes fixed from broken. Then tell the user what you changed and ask
+them to try the thing that failed.
+
+**Their confirmation is what counts.** Yours is a proxy for it. If they say it
+is still wrong, go back to step 2 with the new evidence rather than defending
+the fix.
+
+### Step 5, file the issue, once they confirm
+
+**This is the step that makes the skill self improving, and it is not optional.**
+A fix that lives only in one conversation is a fix the next user does not get.
+
+File it once the user has confirmed the problem is gone. Check for a duplicate
+first, redact the NetID to `<NetID>` and home paths to `~`, never paste key
+material or tokens or keychain output, and confirm the account with
+`gh auth status` before filing, exactly as 13.10 step 4 requires. The repo is
+public and anything you paste is permanent.
+
+The body needs enough for a maintainer to change the skill without re-diagnosing
+anything:
+
+1. **What the user reported**, in their words.
+2. **Their environment**: local OS, editor, which Amarel host, and which phase or
+   feature was in play.
+3. **The evidence**, verbatim and redacted, including whether you reproduced it.
+4. **The cause**, and how the evidence supports it. If you are not sure, say you
+   are not sure. A guess recorded as fact is worse than an open question.
+5. **The fix**, with the exact commands or edits, and whether it is a real repair
+   or a workaround.
+6. **The verification**, both your command output and the user's confirmation.
+7. **What should change in the skill** so the next person never hits this. This
+   is the part a maintainer actually acts on, so be specific: name the file, the
+   phase, and what it should do differently.
+
+Then give the user the issue link and tell them plainly what broke and what you
+did.
+
+### If you could not fix it
+
+File the issue anyway, and say so in the title. An honest dead end with good
+evidence is worth more than silence, and it is the record that lets someone else
+pick it up. Tell the user where it stands and what you ruled out, rather than
+leaving them thinking the problem was imaginary.
 
 ## Dev mode — closing the verification gaps
 
