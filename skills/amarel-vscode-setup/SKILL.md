@@ -2582,22 +2582,37 @@ except `dev-session stop`. This answer is the only waste control there is.
 > **How long should your dev sessions be?**
 >
 > - `4h` a focused block. Starts fastest, because short jobs fit into gaps a
->   3 day job cannot.
-> - `1d` a working day.
-> - `3d` the maximum on general partitions.
+>   longer job cannot.
+> - `8h` a working day.
+> - `1d` overnight, or a run you want to leave going.
+> - `2d` / `3d` a long stretch. `3d` is the maximum on most general partitions.
+> - Or type a SLURM timespec yourself, for example `0-06:00:00`.
 >
-> A session ends at its walltime or when you run `dev-session stop`. Nothing
-> renews it. `dev-session status` warns you once under two hours remain, but
-> nothing renews it for you, deliberately: an indefinitely rolling allocation is
-> the same behaviour OARC objected to, moved to a different node.
+> A session holds its cores for the whole time you ask for, whether or not you
+> are typing. It ends at its walltime or when you run `dev-session stop`.
+> Nothing renews it, and `dev-session status` warns you once under two hours
+> remain.
 >
-> Default if you have no preference: `3d`.
+> **Ask for the shortest block that covers how you actually work.** Starting a
+> new session is one click, so a short session costs you very little and leaves
+> the cores free for someone else in between.
 
-**Tell the user this once, in their own interest:** how long a held session is
-acceptable is a site policy question, not a technical one. If they plan to hold
-multi-day sessions routinely, they should confirm with Rutgers OARC that it is
-acceptable for their account and partition. The skill caps nothing beyond the
-partition limit and the next maintenance window.
+Accept any of `4h`, `8h`, `1d`, `2d`, `3d`, or a SLURM timespec the user types
+themselves, such as `0-06:00:00`. Map the shorthands to
+`0-04:00:00`, `0-08:00:00`, `1-00:00:00`, `2-00:00:00`, `3-00:00:00`. Anything
+longer is clamped to the partition MaxTime and the next maintenance window
+anyway, and the user is told which limit bound it.
+
+**On duration and OARC.** There is no duration limit. What OARC cares about is
+that everyone can get at the resources, which is a fair-share question rather
+than a rule to quote. So do not tell the user to go and ask permission. Help
+them size the request honestly instead: ask what they are actually doing, and
+if a shorter block covers it, offer that. A four hour session that gets renewed
+when needed is friendlier to the queue than a three day one held out of habit,
+and it starts sooner, because short jobs fit gaps a three day job cannot.
+
+Do not editorialise past that. If the user wants three days and their partition
+allows it, give them three days without argument.
 
 Map the answer to `0-04:00:00`, `1-00:00:00` or `3-00:00:00`.
 

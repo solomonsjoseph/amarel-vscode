@@ -1074,19 +1074,42 @@ REMOTE
     human "How long should your dev sessions be?"
     say ""
     say "    4h   a focused block. Starts fastest: short jobs fit into gaps a"
-    say "         3 day job cannot."
-    say "    1d   a working day."
-    say "    3d   the maximum on general partitions."
+    say "         longer job cannot."
+    say "    8h   a working day."
+    say "    1d   overnight, or a run you want to leave going."
+    say "    2d   a long stretch."
+    say "    3d   the maximum on most general partitions."
     say ""
-    say "    A session ends at its walltime or when you run 'dev-session stop'."
-    say "    Nothing renews it, and nothing warns you before it ends."
+    say "    Or type a SLURM timespec yourself, for example 0-06:00:00."
+    say ""
+    say "    Your session holds its cores for the whole time you ask for,"
+    say "    whether or not you are typing. It ends at that walltime or when you"
+    say "    run 'dev-session stop'. Nothing renews it."
+    say ""
+    say "    There is no duration limit on Amarel. Asking for the shortest block"
+    say "    that covers your work just leaves the cores free for someone else in"
+    say "    between, and starting a new session is one click."
     say ""
     local answer=""
-    read -r -p "$(c_yellow '  ?') Session length [4h/1d/3d, default 3d]: " answer </dev/tty
+    read -r -p "$(c_yellow '  ?') Session length [4h/8h/1d/2d/3d or a timespec, default 3d]: " answer </dev/tty
     case "${answer:-3d}" in
-      4h|4H) walltime="0-04:00:00" ;;
-      1d|1D) walltime="1-00:00:00" ;;
-      *)     walltime="3-00:00:00" ;;
+      4h | 4H) walltime="0-04:00:00" ;;
+      8h | 8H) walltime="0-08:00:00" ;;
+      1d | 1D) walltime="1-00:00:00" ;;
+      2d | 2D) walltime="2-00:00:00" ;;
+      3d | 3D) walltime="3-00:00:00" ;;
+      "")      walltime="3-00:00:00" ;;
+      *)
+        # A typed value must satisfy the same whitelist the cluster-side parser
+        # uses, because it ends up on an sbatch command line. Anything else
+        # falls back to the stated default rather than being passed through.
+        if printf '%s' "$answer" | grep -Eq '^([0-9]+-)?[0-9]{1,2}(:[0-9]{2}){0,2}$'; then
+          walltime="$answer"
+        else
+          warn "'$answer' is not a SLURM timespec (D-HH:MM:SS). Using the default 3d."
+          walltime="3-00:00:00"
+        fi
+        ;;
     esac
     info "Sessions will request $walltime on $partition"
   fi
