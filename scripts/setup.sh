@@ -977,6 +977,7 @@ phase_compute_session() {
     say "  Fix: wrap the offending lines in your Amarel ~/.bashrc with"
     say "       case \$- in *i*) ;; *) return ;; esac"
     say "  then re-run this script."
+    COMPUTE_SESSION_SKIP="your Amarel ~/.bashrc prints output on a non-interactive login"
     return 0
   fi
 
@@ -1117,16 +1118,24 @@ REMOTE
   # ── Install the cluster side ───────────────────────────────────────────────
   local cluster_dir="${SKILL_DIR}/cluster"
   for f in amarel-dev-lib dev-session amarel-dev-connect bash_profile_block.sh; do
-    [[ -f "$cluster_dir/$f" ]] || { warn "Missing $cluster_dir/$f, skipping Phase 9.6."; return 0; }
+    [[ -f "$cluster_dir/$f" ]] || {
+      warn "Missing $cluster_dir/$f, skipping Phase 9.6."
+      COMPUTE_SESSION_SKIP="this checkout is missing cluster/$f"
+      return 0
+    }
   done
 
   ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" 'mkdir -p ~/bin' || {
-    warn "Could not create ~/bin on Amarel (non-fatal)."; return 0; }
+    warn "Could not create ~/bin on Amarel."
+    COMPUTE_SESSION_SKIP="~/bin could not be created on Amarel"
+    return 0; }
 
   scp -q "$cluster_dir/amarel-dev-lib" "$cluster_dir/dev-session" \
          "$cluster_dir/amarel-dev-connect" \
          "${AMAREL_USER}@${AMAREL_HOST}:bin/" || {
-    warn "Could not copy the cluster scripts (non-fatal)."; return 0; }
+    warn "Could not copy the cluster scripts to Amarel."
+    COMPUTE_SESSION_SKIP="the cluster scripts could not be copied to Amarel"
+    return 0; }
   info "Installed ~/bin/{amarel-dev-lib,dev-session,amarel-dev-connect}"
 
   # scp does not carry the executable bit from a repo checkout reliably, so set
@@ -1172,6 +1181,7 @@ REMOTE
           'bin/amarel-dev-connect --selftest'; then
     warn "The cluster-side selftest did not pass, so no ssh_config changes were made."
     warn "Fix what it reported above, then re-run this script."
+    COMPUTE_SESSION_SKIP="the cluster-side selftest did not pass"
     return 0
   fi
   info "Cluster-side selftest passed"
@@ -1185,6 +1195,7 @@ REMOTE
     COMPUTE_SESSION_READY=1
   else
     warn "amarel-dev did not resolve as expected; check ~/.ssh/config by hand."
+    COMPUTE_SESSION_SKIP="the amarel-dev entry in ~/.ssh/config did not resolve"
   fi
 }
 
@@ -1343,9 +1354,28 @@ EOM
     return 0
   fi
 
-  cat <<EOM
+  # PHASE 9.6 DID NOT COMPLETE IF WE REACH HERE. Say so before anything else.
+  # Sending the user to the login node without telling them is the exact
+  # behaviour OARC complained about, and a green tick above that instruction
+  # reads as "this is the finished product" rather than "this is the fallback".
+  if [[ -n "${COMPUTE_SESSION_SKIP:-}" ]]; then
+    cat <<EOM
 
-  $(c_green '✓ Server-side setup complete.')
+  $(c_yellow '! Set up, but on a LOGIN NODE. The compute session is not installed.')
+
+  Why: ${COMPUTE_SESSION_SKIP}.
+
+  What this means: your editor will run on a shared login node. Rutgers OARC
+  asks people not to do that, and they do kill processes that load one up. Keep
+  the work light until this is fixed, or fix it now and reconnect.
+
+  To fix it: resolve the line above, then re-run this script. Nothing you have
+  set up so far is lost, and the script skips what is already done.
+
+EOM
+  fi
+
+  cat <<EOM
 
   $(c_bold 'YOUR TURN — finish in VS Code:')
 
@@ -1422,6 +1452,7 @@ EOM
 
   PLATFORM=LEGACY   # safe default until Phase 5.5 probes the remote host
   COMPUTE_SESSION_READY=0   # set by Phase 9.6 when amarel-dev is usable
+  COMPUTE_SESSION_SKIP=""   # why 9.6 bailed, printed in the finish message
 
   phase_preflight
   prefetch_tarball_bg   # warm the tarball cache in the background during auth (LEGACY hint only)
