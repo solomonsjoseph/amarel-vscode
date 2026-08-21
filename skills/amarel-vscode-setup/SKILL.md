@@ -2833,9 +2833,11 @@ personal `Host rutgers.edu`) or any other key, and never reads private-key
 contents. Two modes (the script takes one argument):
 
 - **`config`** (default — `bash reset.sh`): cleans config-level state only —
-  the `~/.zshrc` block, the skill's `Host amarel-new.hpc.rutgers.edu` `ssh_config`
-  block, the `known_hosts` entries, and dedupes Amarel's `authorized_keys`.
-  Leaves your key pair and the deployed sysroot in place.
+  the `~/.zshrc` block, the skill's `ssh_config` blocks (`Host
+  amarel-new.hpc.rutgers.edu`, `Host amarel-jump` and `Host amarel-dev`, each
+  with the comment run the skill wrote above it), the `known_hosts` entries, and
+  dedupes Amarel's `authorized_keys`. Leaves your key pair, the deployed sysroot
+  and any running dev session in place.
 - **`full`** (`bash reset.sh full`): a complete wipe of everything the skill
   created. On top of `config`, it deletes the local `id_ed25519_amarel` key pair
   and, in one SSH call (while key auth still works), removes the skill's key from
@@ -2849,7 +2851,13 @@ contents. Two modes (the script takes one argument):
   state — `data/` and any keys you added yourself are preserved) — forcing **every** phase (1–11) to re-run from
   scratch (you'll set a new passphrase, enter your Amarel password once more,
   re-deploy the sysroot, and re-apply the Source Control fix). This is the mode
-  the Phase 0.1 "fresh start" offer uses. The Amarel-side wipe pins the Amarel key
+  the Phase 0.1 "fresh start" offer uses. **On the Phase 13 side it also
+`scancel`s any running `amarel-dev` job first**, then removes
+`~/bin/amarel-dev-lib`, `~/bin/dev-session`, `~/bin/amarel-dev-connect`,
+`~/.amarel-dev.conf`, `~/.amarel-dev.lock` and `~/.amarel-dev-logs`, and strips
+the `~/.bash_profile` guard between its `# >>> amarel-vscode phase 13 >>>`
+markers. The order matters: once `dev-session` is deleted there is no supported
+way to release the allocation, and it would hold its cores until walltime. The Amarel-side wipe pins the Amarel key
   (`-i … -o IdentitiesOnly=yes`) so it runs even when your agent holds other keys or
   no `ssh_config` block exists yet (a manual setup) — important, because if it were
   skipped, a previously hand-applied `git.path` / `git-modern.sh` would survive and
@@ -2877,6 +2885,13 @@ MODE="${1:-config}"   # "config" (default) or "full" (also deletes the key pair)
 if [ "$MODE" = "full" ]; then
   if ssh -o BatchMode=yes -o ConnectTimeout=5 -i ~/.ssh/id_ed25519_amarel -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'AMAREL' 2>/dev/null
 set -u
+# Phase 13 first, and RELEASE THE JOB BEFORE DELETING ITS TOOLING: once
+# dev-session is gone there is no supported way to stop the allocation, and it
+# would hold its cores until walltime (up to 3 days).
+for j in $(squeue -h -u "$USER" -n amarel-dev -o '%i' 2>/dev/null); do scancel "$j" 2>/dev/null; done
+rm -f ~/bin/amarel-dev-lib ~/bin/dev-session ~/bin/amarel-dev-connect ~/.amarel-dev.conf ~/.amarel-dev.lock
+rm -rf ~/.amarel-dev-logs
+[ -f ~/.bash_profile ] && sed -i.bak "/^# >>> amarel-vscode phase 13 >>>$/,/^# <<< amarel-vscode phase 13 <<</d" ~/.bash_profile
 sed -i.bak "/amarel-vscode/d" ~/.ssh/authorized_keys 2>/dev/null
 rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz ~/.vscode-server/bin ~/.vscode-server/cli
 rm -f ~/.vscode-server/git-modern.sh
@@ -2926,15 +2941,26 @@ fi
 # 3) Remove ONLY the skill-authored Host amarel-new.hpc.rutgers.edu block from ~/.ssh/config
 if [ -f ~/.ssh/config ]; then
   cp ~/.ssh/config ~/.ssh/config.bak
+  # skip=2 is a comment run the skill wrote above a stanza; skip=1 is a stanza
+  # body. Matching only the Host line would leave ~40 orphaned comment lines
+  # behind, which reads as a failed reset even though the stanza is gone.
   awk '
+    /^# Added by amarel-vscode/ { skip=2; next }
     /^Host[ \t]+amarel(-new\.hpc)?\.rutgers\.edu[ \t]*$/ { skip=1; next }
+    /^Host[ \t]+amarel-(jump|dev)[ \t]*$/ { skip=1; next }
+    skip==2 {
+      if ($0 ~ /^#/ || $0 ~ /^[ \t]/ || $0 ~ /^[ \t]*$/) { next }
+      skip=0
+    }
     skip==1 {
       if ($0 ~ /^Host[ \t]/) { skip=0 }
       else if ($0 ~ /^[ \t]/ || $0 ~ /^[ \t]*$/) { next }
       else { skip=0 }
     }
     { print }
-  ' ~/.ssh/config.bak > ~/.ssh/config && chmod 600 ~/.ssh/config && echo "✓ ~/.ssh/config: amarel block removed (others kept)"
+  ' ~/.ssh/config.bak > ~/.ssh/config && chmod 600 ~/.ssh/config && echo "✓ ~/.ssh/config: amarel, amarel-jump and amarel-dev blocks removed (others kept)"
+  # Only if it is empty: a non-empty one holds live control sockets.
+  rmdir ~/.ssh/cm 2>/dev/null && echo "✓ ~/.ssh/cm removed (was empty)"
 fi
 
 # 4) Remove all amarel-new.hpc.rutgers.edu lines (any algorithm) from known_hosts
@@ -2989,7 +3015,7 @@ Set-StrictMode -Version Latest
 
 # 1) FULL or CONFIG: Amarel-side cleanup/dedupe first, while SSH config and keys are fully intact!
 if ($Mode -eq 'full') {
-  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu "sed -i.bak '/amarel-vscode/d' ~/.ssh/authorized_keys 2>/dev/null; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz ~/.vscode-server/bin ~/.vscode-server/cli; rm -f ~/.vscode-server/git-modern.sh; [ -f ~/.bashrc ] && sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc; if command -v python3 >/dev/null 2>&1; then python3 -c 'import json,os;p=os.path.expanduser(`"~/.vscode-server/data/Machine/settings.json`");d=(json.load(open(p)) if os.path.exists(p) and os.path.getsize(p)>0 else {});d=(d if isinstance(d,dict) else {});[d.pop(k,None) for k in (`"git.path`",`"extensions.verifySignature`")];open(p,`"w`").write(json.dumps(d,indent=4)+chr(10))' 2>/dev/null; elif command -v jq >/dev/null 2>&1; then jq 'del(.`"git.path`", .`"extensions.verifySignature`")' ~/.vscode-server/data/Machine/settings.json > ~/.vscode-server/data/Machine/settings.json.tmp 2>/dev/null && mv -f ~/.vscode-server/data/Machine/settings.json.tmp ~/.vscode-server/data/Machine/settings.json; fi; true" 2>$null
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu "for j in `$(squeue -h -u `$USER -n amarel-dev -o '%i' 2>/dev/null); do scancel `$j 2>/dev/null; done; rm -f ~/bin/amarel-dev-lib ~/bin/dev-session ~/bin/amarel-dev-connect ~/.amarel-dev.conf ~/.amarel-dev.lock; rm -rf ~/.amarel-dev-logs; [ -f ~/.bash_profile ] && sed -i.bak '/^# >>> amarel-vscode phase 13 >>>`$/,/^# <<< amarel-vscode phase 13 <<</d' ~/.bash_profile; sed -i.bak '/amarel-vscode/d' ~/.ssh/authorized_keys 2>/dev/null; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz ~/.vscode-server/bin ~/.vscode-server/cli; rm -f ~/.vscode-server/git-modern.sh; [ -f ~/.bashrc ] && sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc; if command -v python3 >/dev/null 2>&1; then python3 -c 'import json,os;p=os.path.expanduser(`"~/.vscode-server/data/Machine/settings.json`");d=(json.load(open(p)) if os.path.exists(p) and os.path.getsize(p)>0 else {});d=(d if isinstance(d,dict) else {});[d.pop(k,None) for k in (`"git.path`",`"extensions.verifySignature`")];open(p,`"w`").write(json.dumps(d,indent=4)+chr(10))' 2>/dev/null; elif command -v jq >/dev/null 2>&1; then jq 'del(.`"git.path`", .`"extensions.verifySignature`")' ~/.vscode-server/data/Machine/settings.json > ~/.vscode-server/data/Machine/settings.json.tmp 2>/dev/null && mv -f ~/.vscode-server/data/Machine/settings.json.tmp ~/.vscode-server/data/Machine/settings.json; fi; true" 2>$null
   if ($LASTEXITCODE -eq 0) { "✓ Amarel: skill key, sysroot, ~/.bashrc loader, git-modern.sh, and git.path/verifySignature settings removed" } else { "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)" }
 } else {
   & ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu "sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys" 2>$null
@@ -3001,18 +3027,27 @@ $config = "$HOME\.ssh\config"
 if (Test-Path $config) {
   Copy-Item $config "$config.bak" -Force
   $out = [System.Collections.Generic.List[string]]::new()
-  $skip = $false
+  $mode = ''
   foreach ($line in Get-Content $config) {
-    if ($line -match '^Host[ \t]+amarel(-new\.hpc)?\.rutgers\.edu[ \t]*$') { $skip = $true; continue }
-    if ($skip) {
-      if ($line -match '^Host[ \t]') { $skip = $false }
-      elseif ($line -match '^[ \t]' -or $line -match '^[ \t]*$') { continue }
-      else { $skip = $false }
+    # $mode 'comment' is a comment run the skill wrote above a stanza; 'stanza'
+    # is a stanza body. Matching only the Host line would leave the comment run
+    # orphaned in the file.
+    if ($line -match '^# Added by amarel-vscode') { $mode = 'comment'; continue }
+    if ($line -match '^Host[ \t]+amarel(-new\.hpc)?\.rutgers\.edu[ \t]*$') { $mode = 'stanza'; continue }
+    if ($line -match '^Host[ \t]+amarel-(jump|dev)[ \t]*$') { $mode = 'stanza'; continue }
+    if ($mode -eq 'comment') {
+      if ($line -match '^#' -or $line -match '^[ \t]' -or $line -match '^[ \t]*$') { continue }
+      $mode = ''
     }
-    if (-not $skip) { $out.Add($line) }
+    if ($mode -eq 'stanza') {
+      if ($line -match '^Host[ \t]') { $mode = '' }
+      elseif ($line -match '^[ \t]' -or $line -match '^[ \t]*$') { continue }
+      else { $mode = '' }
+    }
+    if (-not $mode) { $out.Add($line) }
   }
   Set-Content -Path $config -Value $out -Encoding UTF8
-  "✓ ${config}: amarel block removed (others kept)"
+  "✓ ${config}: amarel, amarel-jump and amarel-dev blocks removed (others kept)"
 }
 
 # 3) Remove all amarel-new.hpc.rutgers.edu lines (any algorithm) from known_hosts
