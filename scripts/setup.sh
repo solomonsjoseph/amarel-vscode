@@ -956,6 +956,33 @@ phase_compute_session() {
     return 0
   fi
 
+  # ── OPT-IN. Phase 13 is not for everyone, so ask before touching anything. ─
+  # Most people setting this up want an editor on Amarel and nothing more. The
+  # compute session matters to the ones running real work, and for them it is
+  # the difference between OARC leaving them alone and OARC killing the job.
+  #
+  # Asked here, after Phase 11, so everything through Phase 12 is already
+  # working. Declining leaves a complete, usable login-node setup: no guard, no
+  # ssh_config blocks, no cluster scripts, nothing to undo.
+  say ""
+  human "Do you want your editor to run on a COMPUTE node?"
+  say ""
+  say "  This books a small SLURM job and points an alias at it, so one click"
+  say "  lands you on a compute node instead of a shared login node."
+  say ""
+  say "  Yes  if you run anything real on Amarel: builds, notebooks, training,"
+  say "       language servers, or an editor left open for hours. OARC kills"
+  say "       processes that load a login node, and this is what avoids that."
+  say "  No   if you mostly edit and browse files over SSH. Everything you have"
+  say "       set up already works. You can run this script again later and"
+  say "       say yes; nothing here is one-way."
+  say ""
+  if ! confirm "Set up the compute-node session?"; then
+    info "Skipping the compute-node session. Your login-node setup is complete."
+    COMPUTE_SESSION_DECLINED=1
+    return 0
+  fi
+
   # ── Hard gate: the remote shell must be silent on stdout ───────────────────
   # Every byte a chatty ~/.bashrc writes to stdout is fed into the SSH byte
   # stream. Measured 2026-08-21: a single clean line before the SSH banner is
@@ -1355,11 +1382,29 @@ EOM
     return 0
   fi
 
+  # DECLINED IS NOT A FAILURE. A user who said no gets a clean finish that does
+  # not nag, does not imply something is missing, and says how to change their
+  # mind. Checked before the failure branch because both leave READY at 0.
+  if [[ "${COMPUTE_SESSION_DECLINED:-0}" -eq 1 ]]; then
+    cat <<EOM
+
+  $(c_green '✓ Setup complete.') Your editor will connect to a login node.
+
+  Keep the work light there: builds, training runs and long-lived language
+  servers are what Rutgers OARC asks people to keep off login nodes, and they
+  do kill processes that load one up.
+
+  Changed your mind, or your work got heavier? Re-run this script and say yes
+  to the compute-node question. Nothing you have set up is lost.
+
+EOM
+  fi
+
   # PHASE 9.6 DID NOT COMPLETE IF WE REACH HERE. Say so before anything else.
   # Sending the user to the login node without telling them is the exact
   # behaviour OARC complained about, and a green tick above that instruction
   # reads as "this is the finished product" rather than "this is the fallback".
-  if [[ -n "${COMPUTE_SESSION_SKIP:-}" ]]; then
+  if [[ -n "${COMPUTE_SESSION_SKIP:-}" && "${COMPUTE_SESSION_DECLINED:-0}" -ne 1 ]]; then
     cat <<EOM
 
   $(c_yellow '! Set up, but on a LOGIN NODE. The compute session is not installed.')
@@ -1454,6 +1499,7 @@ EOM
   PLATFORM=LEGACY   # safe default until Phase 5.5 probes the remote host
   COMPUTE_SESSION_READY=0   # set by Phase 9.6 when amarel-dev is usable
   COMPUTE_SESSION_SKIP=""   # why 9.6 bailed, printed in the finish message
+  COMPUTE_SESSION_DECLINED=0  # user said no to Phase 9.6; not a failure
 
   phase_preflight
   prefetch_tarball_bg   # warm the tarball cache in the background during auth (LEGACY hint only)

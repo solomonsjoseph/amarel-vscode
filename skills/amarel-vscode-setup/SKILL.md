@@ -75,7 +75,8 @@ is skipped. Phase 5.5 detects which host you are on and routes accordingly.
 
 **Two entry modes — decide before Phase 0.**
 - **Full setup** (first-time VS Code-on-Amarel): run Phases 0 → 13 in order,
-  with one exception: **Phase 13 runs before Phase 10**, because Phase 13
+  with one exception: **Phase 13 is optional and comes after Phase 12**, and
+  Phase 10's target depends on whether it ran. Phase 13
   decides which host the user picks in the Remote-SSH menu. So the real
   order is 0 → 9, then 13, then 10 → 12.
 - **Targeted repair** (the user is *already connected* — status bar shows
@@ -1932,13 +1933,29 @@ already open (otherwise no action needed).
 
 **Goal:** The user finishes the setup inside the VS Code GUI.
 
-**Print these steps to the user verbatim:**
+**Which host they pick depends on whether Phase 13 has run.** Phase 13 comes
+after Phase 12 and is optional, so on a first pass through the runbook the
+answer is almost always the login host. Check rather than assume:
+
+[EXEC]
+```bash
+grep -q '^Host amarel-dev$' ~/.ssh/config 2>/dev/null && echo "PICK amarel-dev" || echo "PICK the login host"
+```
+
+`PICK the login host` → use `amarel-new.hpc.rutgers.edu` in step 4 below, and
+**drop the warning block underneath**, because `amarel-dev` and `amarel-jump`
+do not exist yet and naming them will only confuse. This is a complete, correct
+setup, not a lesser one.
+
+`PICK amarel-dev` → use `amarel-dev` and keep the warning block.
+
+**Print these steps to the user verbatim, with step 4 filled in from above:**
 
 > 1. Open VS Code.
 > 2. `Cmd+Shift+P` (Mac) / `Ctrl+Shift+P` (Win/Linux).
 > 3. Type and run: **Remote-SSH: Connect to Host**.
-> 4. From the list, pick **`amarel-dev`**. The list shows host *aliases* from your
->    SSH config, so this is just `amarel-dev`; your NetID is already baked into the
+> 4. From the list, pick **`<the host from the check above>`**. The list shows host
+>    *aliases* from your SSH config, so your NetID is already baked into the
 >    config and you do **not** type `NetID@host`.
 > 5. First time only: click **Allow** on the "OS unsupported" warning.
 > 6. Open View → Output, dropdown → Remote-SSH. Watch for `Server started`.
@@ -2473,9 +2490,19 @@ interactive rebase (`git rebase -i`) and re-stamp each, or `git filter-repo`.
 **Goal:** Give the user an editor target that lands on a **compute node** every
 time, instead of a login node.
 
-**Run this before Phase 10.** It decides which host the user picks in the
-Remote-SSH menu, so running it after the connect step would send them to the
-login node first and then move them.
+**Optional, and asked after Phase 12.** Phases 1 to 12 give a complete, working
+login-node setup, and that is all most people want. This phase is for the ones
+running real work, where a login node gets their processes killed.
+
+**Never run it without asking.** See 13.0a. A user who says no keeps everything
+they already have: no guard, no `ssh_config` blocks, no cluster scripts, nothing
+to undo. They can run the skill again later and say yes.
+
+**A user who opts in has already connected to the login node at Phase 10**, and
+this phase installs a guard that refuses that target from then on. So when this
+phase finishes, tell them to switch their editor to `amarel-dev` and close the
+old window. If you skip that, their next reconnect fails with `REFUSED` and they
+will not know why.
 
 **Why this exists.** OARC kills processes that load the login nodes. The editor
 is not a thin client: its extension host alone was measured at 145 threads on
@@ -2497,6 +2524,37 @@ shared, nothing privileged, nothing setuid.
 Source files live in the repo at `cluster/`. If you are running from the skill
 without a repo checkout, tell the user to clone the repo first; there is nothing
 to copy otherwise.
+
+### 13.0a — Ask first. Do not skip this.
+
+Run the skip probe in 13.0 first. If it says `SKIP`, the user already has this
+and you say nothing. Otherwise ask, in your own words, and wait for a real
+answer:
+
+> Do you want your editor to run on a compute node?
+>
+> This books a small SLURM job and points an alias at it, so one click lands
+> you on a compute node instead of a shared login node.
+>
+> **Yes** if you run anything real on Amarel: builds, notebooks, training,
+> language servers, or an editor left open for hours. OARC kills processes that
+> load a login node, and this is what avoids that.
+>
+> **No** if you mostly edit and browse files. Everything you have set up already
+> works, and you can come back and say yes any time.
+
+**No means stop.** Do not install the guard, do not write the `ssh_config`
+blocks, do not copy the cluster scripts. Tell them their setup is finished, that
+the login node is fine for light work, and that they can ask for the compute
+session later. Then stop. Do not ask twice, do not argue, and do not warn them
+again.
+
+**Yes means continue to 13.1**, and finish by telling them to switch their
+editor target to `amarel-dev`, because the guard will refuse the login node from
+now on.
+
+If the user asked for the compute session by name, that is a yes already. Do not
+re-ask.
 
 ### 13.0 — Skip probe
 

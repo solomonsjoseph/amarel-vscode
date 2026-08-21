@@ -24,7 +24,8 @@ Remote-SSH GLIBC error":
    remote platform and skips the sysroot Phases 6–9 on RHEL 9.6; **Phase 11**
    points VS Code at a modern git on Amarel so Source Control detects repos;
    **Phase 12** is optional GitHub auth + git identity; **Phase 13** installs the
-   `amarel-dev` compute-node session and **runs before Phase 10**, because it decides
+   `amarel-dev` compute-node session, is **optional and offered after Phase 12**. Ask
+   before running it. Whether it ran decides
    which host the user picks in the Remote-SSH menu.) **If the user is already connected and
    only Source Control / git (or GitHub) is broken, use the Phase 0.2 fast path
    in `AGENTS.md` to jump straight to Phase 11/12 — don't re-run Phases 1–10.**
