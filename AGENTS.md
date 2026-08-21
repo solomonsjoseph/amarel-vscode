@@ -106,6 +106,13 @@ way). Source being "one line" does NOT prevent this — line *length* vs termina
   `-ExecutionPolicy`). Quote the path.
   Launch via the interpreter (`bash`/`powershell -File`), never `./file`. Remove the
   staged file in the next `[EXEC]` verify. Today only Phase 3.1 exceeds the budget.
+  **Windows: say `powershell`, never `pwsh`.** `pwsh` is PowerShell Core, a
+  separate install that many Windows machines do not have. When it is missing the
+  launcher does not error, it does nothing at all, and the next phase fails for an
+  unrelated-looking reason. Issue #18 lost an hour to exactly this: the key install
+  silently never ran, and it only surfaced when the login test asked for the Amarel
+  password instead of the key passphrase. `powershell` is Windows PowerShell 5.1
+  and ships with the OS.
 
 **LLM operator rule — isolate the copy-paste payload.** The user must see at a
 glance exactly what to copy, and copy *only* that. Whenever you hand over a
@@ -3123,6 +3130,22 @@ Say this plainly if the owner ever relies on it as protection:
    duplicate first, and confirm the account before filing.
 
 5. **Report back** with what closed, what did not, and what you changed.
+
+### The list as it stands, 2026-08-21
+
+Written down so the next run starts from facts rather than a re-reading of the
+whole verification log. Treat it as a starting point, not the whole truth: check
+`cluster/VERIFICATION-*.md` and the tracking issue, because items get added.
+
+| Item | Why it is open | Closeable on the owner's Mac? |
+|---|---|---|
+| `scripts/setup.ps1` has never been executed | no Windows machine | **No.** `pwsh` on macOS parses the script, but the Windows `ssh_config` path, `NUL` as the known-hosts sink and OpenSSH-for-Windows behaviour are exactly the parts that will not run. Running it there proves syntax and nothing more, and must be recorded as syntax only. Real Windows or a VM is the only honest close. |
+| Maintenance-window refusal and the walltime trim | next window is 2026-09-15 | **Partly.** A harness that feeds fake `scontrol` output closes the logic. The live window closes the rest. Do not mark the item closed on the harness alone. |
+| The editor half of verification item 12 | needs a human opening a remote window | **Yes.** The owner drives it. |
+| A live `full` reset | destroys the key pair and the running session | **Yes,** against a throwaway `$HOME` or a scratch account, never the working one. |
+
+The owner tests on their own Mac, so plan for macOS and for whatever can be
+stood up there. Ask before touching the working setup.
 
 ### The limits that do not lift in dev mode
 
