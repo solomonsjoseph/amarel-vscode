@@ -78,9 +78,9 @@ Numbering follows the plan.
 | 7 | Trim path | PENDING, needs the collision zone from 2026-09-12 |
 | 8 | Generic partition | PASS. main, hal0198, TIME_LIMIT 3-00:00:00 from sinfo |
 | 9 | Source Control on a compute node | PASS in part. git 2.55.0 resolves and runs on gpuk008 |
-| 10 | Session length question | PENDING. Both lanes are written; neither has been exercised, because ~/.amarel-dev.conf already exists and is deliberately preserved |
+| 10 | Session length question | PASS in both lanes, all four branches. See below |
 | 11 | Windows | DEFERRED by the user on 2026-08-21, after the macOS path is finished |
-| 12 | Where the stderr line appears | PENDING, needs 2026-09-15 |
+| 12 | Where the stderr line appears | ANSWERED, and the answer was not the one assumed. See below |
 | 13 | Reset removes everything | PARTIAL. Logic verified offline; not run against the live account |
 
 ### Timings
@@ -217,6 +217,119 @@ bash_profile marker deletion    tested against the real markers at lines 1 and
                                 71 of cluster/bash_profile_block.sh
 extracted reset.sh              bash -n clean, shellcheck -S warning clean
 ```
+
+## Item 10, the session length question, and the two defects it found
+
+Tested by moving `~/.amarel-dev.conf` aside, which is the only way either lane
+asks. `setup.sh` was driven through a real pty, because it reads from `/dev/tty`
+and a pipe never reaches it.
+
+| Lane | Partition answer | Length answer | Written to the conf |
+|---|---|---|---|
+| skill | lab | `4h` | `p_wj183_1`, `0-04:00:00` |
+| setup.sh | `y` | `1d` | `p_wj183_1`, `1-00:00:00` |
+| setup.sh | `y` | Enter | `p_wj183_1`, `3-00:00:00`, the stated default |
+| setup.sh | `n` | `4h` | `cmain`, `0-04:00:00`, the general fallback |
+
+Mode 600 every time. Partition detection took 1.5s and found 7 partitions,
+correctly labelling `p_wj183_1` as the lab one. The `4h` answer was traced to
+SLURM: `job=60726482 partition=p_wj183_1 cores=4 timelimit=4:00:00`.
+
+**Defect 5, found here.** `setup.sh` aborted at Phase 9.6 with `out: unbound
+variable`. The partition probe was a quoted heredoc inside `$( )`, and bash
+3.2.57, which is what `#!/usr/bin/env bash` resolves to on a stock Mac,
+mis-parses that when the body contains unbalanced `)`. The `case ... p_*)`
+patterns supply exactly that, so the body was expanded locally. Reduced to 14
+lines: the same heredoc without a `case` is fine, adding one breaks it. Bash 5
+parses both, so it would have shipped as "works on my machine". The heredoc is
+now read into a variable and piped in.
+
+**Defect 6, found by running cold cycles back to back.** 2 of 4 failed, each at
+exactly 121s, alternating. `scancel` does not remove a job at once: it stays
+visible in state COMPLETING while the epilog runs, measured at +3s and gone by
++6s. `adl_job_any` had no state filter, so `dev-session ensure` saw the corpse,
+decided a job existed, and waited five minutes for a dead job while the
+connect's `timeout 120` killed it first. That is the "restart my session" path.
+Now filtered to `PD,R,CF`, the only states a job can still reach RUNNING from.
+A single cold test cannot find this; it needs a tight loop.
+
+## Repeatability, after both fixes
+
+```
+cold cycles (job destroyed, master dropped, reconnect)   16 / 16   7-8s each
+warm connects                                            27 / 27   under 1s
+landings on amarel3 or amarel4                            0
+```
+
+One cold cycle landed on gpuk012 rather than gpuk008, which also shows node
+resolution is not sticky.
+
+**Concurrency.** Queue emptied, then 5 simultaneous connects with multiplexing
+explicitly disabled so each genuinely raced. All 5 connected, and exactly one
+job existed afterwards (60726892). The flock claim holds against this code, not
+just the prototype.
+
+## Item 12, where the failure line appears, and why the design changed
+
+It does not appear. Not during maintenance, not ever, in the editor.
+
+With `ControlPersist` set on Host amarel-dev, which is what ships, OpenSSH
+detaches the master and sends its standard file descriptors to `/dev/null`, so
+a failing ProxyCommand's stderr is discarded. From `ssh.c`,
+`control_persist_detach()`:
+
+```c
+if (stdfd_devnull(1, 1, !(log_is_on_stderr() && debug_flag)) == -1)
+        error_f("stdfd_devnull failed");
+daemon(1, 1);
+```
+
+stderr survives only when `debug_flag` is set, that is `ssh -v`. Verified both
+ways: a plain connect shows only `Connection closed by UNKNOWN port 65535`, and
+`ssh -v amarel-dev` prints the real line. stdout is not an alternative either,
+ssh discards pre-banner output from a failing ProxyCommand.
+
+Measured trade-off, 2026-08-21:
+
+```
+                         ControlPersist 30m   ControlPersist off
+reuse, master alive             0.38s               0.36s
+one-shot CLI, no master         0.38s               1.71s
+nc on the login node                1                   1
+close window 1 of 2          window 2 lives      window 2 DIES
+failure line reaches user         no                  yes
+```
+
+The 1.71s figure is a one-shot artifact: with any long-lived client holding the
+master, which is what an editor is, the two are the same speed. So speed was not
+the reason to keep ControlPersist. The window-ownership result was. Without
+ControlPersist the first window owns the master and closing it kills the others.
+
+Decision: keep ControlPersist, move the message. `amarel-dev-connect` records
+its reason to `~/.amarel-dev-logs/last-failure`, clears it on a successful
+connect, and `dev-session status` prints it first. Phase 13.10 is the lane that
+reads it.
+
+## Phase 13.10, tested against an injected fault
+
+`~/bin/amarel-dev-connect` was removed to simulate a broken install.
+
+```
+user sees        Connection closed by UNKNOWN port 65535
+dev-session status   RUNNING on gpuk008, healthy, MISLEADING on its own
+last-failure     empty, correctly: the script never ran, so it never wrote
+selftest         bash: line 1: bin/amarel-dev-connect: No such file or directory
+cause            cluster scripts gone, matches the table
+fix              re-ran 13.4
+verify           selftest: OK, connect -> gpuk008
+```
+
+The selftest is what caught it. Status alone looked healthy, which is why the
+runbook says run every probe rather than stopping at the first.
+
+No issue was filed for this one: the fault was injected by hand during testing,
+not a repo defect. `gh auth status` was checked and the active account is
+`solomonsjoseph`, matching the repo owner.
 
 ## Still live on the laptop, deliberately
 
