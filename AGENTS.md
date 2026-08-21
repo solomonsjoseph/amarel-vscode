@@ -48,7 +48,14 @@ connected, **Phase 11** also fixes the Source Control "no Git repository" failur
 > 4. **Host lock (transition period):** Two valid targets — the new **`amarel-new.hpc.rutgers.edu`** (RHEL 9.6, the default this runbook uses) and the legacy **`amarel.rutgers.edu`** (CentOS 7, being retired). Commands below are written for `amarel-new.hpc.rutgers.edu`; if the user is deliberately on the legacy host, substitute `amarel.rutgers.edu` in every command. Do **not** substitute any *other* hostname — not `amarel2.rutgers.edu`, not any other `*.rutgers.edu` host. Phase 5.5 auto-detects the remote glibc and routes the sysroot work accordingly, so whichever of the two hosts the user targets is handled correctly.
 > 5. **Verify; never take "done" on faith.** When a step hands off to the user (a `[TTY]` command, a GUI action, a `fresh` reset, a `gh` login) and they reply "done", run a read-only probe to confirm the *actual* outcome **before you advance or ask the next question** — the user saying it worked is not proof it worked. And before running any step, probe whether its outcome is already in place: if it is, **skip** it (a resume); if stale residue from a prior run remains where a `fresh` start should have cleaned it, **remove it first**. The skip-probes (Phases 1, 3, 4, 7, 9, 11, 12, 13) already embody this — extend the same discipline to every hand-off, including the reset and the GitHub steps that historically advanced on the user's word alone.
 
-**Two entry modes — decide before Phase 0.**
+**Two entry modes — decide before Phase 0.** Both modes below run **Phase 0.1
+(fresh start or resume?) right after Phase 0's preflight, before any other
+work.** This is a mandatory gate, not something the skip-probes (Phase 1.0,
+3.0, 4.0/4.2, etc.) can substitute for: those probes only detect what state
+already exists, they never ask the user whether they want to keep or wipe
+it. Do not jump from Phase 0's preflight straight into a skip-probe (Phase
+1.0 Gate 1/2 or Phase 0.2's targeted-repair check) without asking Phase 0.1
+first.
 - **Full setup** (first-time VS Code-on-Amarel): run Phases 0 → 13 in order,
   with one exception: **Phase 13 is optional and comes after Phase 12**, and
   Phase 10's target depends on whether it ran. Phase 13
@@ -447,7 +454,7 @@ fi
 CFG=$(ssh -G amarel-new.hpc.rutgers.edu 2>/dev/null)
 echo "$CFG" | grep -qE '^identityfile.*id_ed25519_amarel' && \
 echo "$CFG" | grep -qE '^identitiesonly yes' && \
-echo "$CFG" | grep -qE '^addkeystoagent yes' && \
+echo "$CFG" | grep -qE '^addkeystoagent (yes|true)' && \
 echo "$CFG" | grep -qE '^user <NetID>$' && CONFIG_OK=0 || CONFIG_OK=1
 
 if [ "$KEY_OK" -eq 0 ] && [ "$CONFIG_OK" -eq 0 ]; then
@@ -472,7 +479,7 @@ if (Test-Path "$HOME\.ssh\id_ed25519_amarel.pub") {
 $cfg = & ssh -G amarel-new.hpc.rutgers.edu 2>$null
 $configOk = ($cfg -match 'identityfile.*id_ed25519_amarel') -and
             ($cfg -match 'identitiesonly yes') -and
-            ($cfg -match 'addkeystoagent yes') -and
+            ($cfg -match 'addkeystoagent (yes|true)') -and
             ($cfg -match '^user <NetID>$')
 if ($keyOk -and $configOk) { "SKIP: key auth + ssh_config already correct — skipping Phases 1–5" }
 else { "PROCEED: running key auth setup" }
