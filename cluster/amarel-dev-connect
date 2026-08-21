@@ -1,0 +1,247 @@
+#!/usr/bin/env bash
+# amarel-dev-connect -- the connect-time brain for ssh host `amarel-dev`.
+#
+# Installs to ~/bin/amarel-dev-connect and runs ON THE CLUSTER, driven from the
+# laptop by one line of ssh_config:
+#
+#     ProxyCommand ssh -q amarel-jump bin/amarel-dev-connect
+#
+# THE BRAIN LIVES HERE, NOT ON THE LAPTOP. The prototype ran this logic as a
+# bash script on the laptop, and that single choice caused most of its
+# difficulty: `%N` in a script but `%%N` in ssh_config because only ssh_config
+# percent-expands; single quotes around the remote script or the laptop shell
+# runs squeue locally; and being bash at all meant Windows got nothing. Moving
+# it here makes the laptop side one line that is byte-identical on macOS,
+# Linux and Windows, and it is why Cursor and Positron work with no per-client
+# code. Do not move it back.
+#
+# STDOUT IS THE SSH TUNNEL. Every byte written to stdout is fed into the SSH
+# byte stream and corrupts the handshake. Only `nc` may own stdout. Progress
+# notes go to the log file, never to the terminal.
+#
+# DO NOT ADD A RETRY LOOP. The editor already retries on its own schedule; a
+# loop here multiplies against it and recreates the endless reconnect this
+# script exists to fix. Single shot: provision, wait inside the budget, then
+# succeed or exit fast with a readable reason.
+#
+# ---------------------------------------------------------------------------
+# TIME BUDGET. Every wait sums over the LONGEST PATH, not per step, and the
+# total must stay under the editor's 300s ceiling:
+#
+#     repair_pending 20   settle 20 x 3s   =  60s
+#     provision           flock + sbatch   = 150s
+#     repair_pending 10   settle 10 x 3s   =  30s
+#                                    total   240s
+#     plus 3-25s of ssh connect overhead  ->  ~265s against 300s
+#
+# An earlier draft used `flock -w 330`, exceeded the ceiling, and the editor
+# SIGKILLed the proxy before any diagnostic reached the user: a silent hang. A
+# helper must always fail faster than its caller's patience. If any wait
+# lengthens, re-add the whole column.
+# ---------------------------------------------------------------------------
+set -uo pipefail
+
+LIB="${AMAREL_DEV_LIB:-$HOME/bin/amarel-dev-lib}"
+if [ ! -r "$LIB" ]; then
+	echo "amarel-dev: $LIB is missing, re-run the Amarel setup. Details: bin/dev-session status" >&2
+	exit 1
+fi
+# shellcheck source=./amarel-dev-lib
+. "$LIB"
+adl_load_conf
+
+LOGFILE="$ADL_LOG_DIR/connect.log"
+
+# Progress goes to the log. The user sees ONE line, and only on failure.
+#
+# WHY EXACTLY ONE LINE. A failure popup always appears, but whether our text
+# rides inside it is unconfirmed and cannot be tested until a maintenance
+# window opens on 2026-09-15. The Output panel truncates and a notification may
+# show only the last line, so one line makes first and last the same line and
+# it stops mattering which the client reads.
+note() {
+	mkdir -p "$ADL_LOG_DIR" 2>/dev/null
+	printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >>"$LOGFILE" 2>/dev/null
+}
+fail() {
+	note "FAILED: $*"
+	printf 'amarel-dev: %s Details: bin/dev-session status\n' "$*" >&2
+	exit 1
+}
+
+# --------------------------------------------------------------------------
+# --selftest: run directly over ssh, not as a ProxyCommand, so stdout is safe.
+# Phase 13 of setup.sh gates writing the ssh_config blocks on this passing,
+# because a config written before the cluster side works produces a first click
+# that fails with "No such file or directory".
+# --------------------------------------------------------------------------
+if [ "${1:-}" = "--selftest" ]; then
+	rc=0
+	echo "amarel-dev-connect selftest on $(hostname -s)"
+	echo "  conf:      $ADL_CONF $([ -r "$ADL_CONF" ] && echo present || echo MISSING)"
+	echo "  partition: ${ADL_PARTITION:-<unset>}"
+	echo "  request:   $ADL_CPUS cores, $ADL_MEM, $ADL_WALLTIME"
+	echo "  log dir:   $ADL_LOG_DIR"
+	for c in squeue sbatch scancel scontrol sinfo srun flock nc awk sed grep timeout; do
+		if command -v "$c" >/dev/null 2>&1; then
+			echo "  found:     $c"
+		else
+			echo "  MISSING:   $c"
+			rc=1
+		fi
+	done
+	# GNU `date -d` is critical: every maintenance calculation goes through it.
+	if date -d "2026-09-15T08:00:00" +%s >/dev/null 2>&1; then
+		echo "  found:     GNU date -d"
+	else
+		echo "  MISSING:   GNU date -d"
+		rc=1
+	fi
+	if [ -n "$ADL_PARTITION" ]; then
+		echo "  MaxTime:   $(adl_part_maxtime "$ADL_PARTITION")s on $ADL_PARTITION"
+		IFS='|' read -r st sw <<<"$(adl_clamp_walltime "$ADL_WALLTIME" "$ADL_PARTITION")"
+		echo "  would ask: $st${sw:+  (clamped by $sw)}"
+	else
+		echo "  MaxTime:   skipped, no partition configured"
+		rc=1
+	fi
+	if adl_maint_open; then
+		echo "  maint:     OPEN now ($(adl_maint_window))"
+	else
+		m=$(adl_maint_next)
+		if [ -n "$m" ]; then
+			echo "  maint:     next $(date -d "@$m" '+%Y-%m-%d %H:%M')"
+		else
+			echo "  maint:     none published"
+		fi
+	fi
+	mkdir -p "$ADL_LOG_DIR" && echo "  log dir:   writable" || { echo "  log dir:   NOT WRITABLE"; rc=1; }
+	[ "$rc" -eq 0 ] && echo "selftest: OK" || echo "selftest: FAILED"
+	exit "$rc"
+fi
+
+# --------------------------------------------------------------------------
+
+# Poll for the job to enter RUNNING. $1 = attempts, 3s apart.
+settle() {
+	local i n
+	for i in $(seq 1 "$1"); do
+		sleep 3
+		n=$(adl_node)
+		[ -n "$n" ] && return 0
+	done
+	return 1
+}
+
+# A pending job blocked by a maintenance reservation can be shrunk to fit and
+# then starts immediately. Reducing a TimeLimit is permitted to the job owner
+# because it only ever releases resources. Any other pending reason (Resources,
+# Priority) is a normal queue wait that trimming cannot help, so it is reported
+# instead of meddled with.
+#
+# HARD GUARD: this path only ever SHRINKS. Never make it trim up.
+# $1 = settle attempts, 3s each. See the TIME BUDGET above before changing it.
+repair_pending() {
+	local tries pj why spec clamp cur cs ns
+	tries="$1"
+	pj=$(adl_job_pending) || return 1
+	[ -n "$pj" ] || return 1
+
+	why=$(adl_pending_reason "$pj")
+	case "$why" in
+	*Reserved* | *ReqNodeNotAvail*) ;;
+	*)
+		note "job $pj is queued normally: $why"
+		return 1
+		;;
+	esac
+
+	note "job $pj blocked by maintenance reservation: $why"
+	IFS='|' read -r spec clamp <<<"$(adl_clamp_walltime "$ADL_WALLTIME" "$ADL_PARTITION")"
+	cur=$(squeue -h -j "$pj" -o '%l' 2>/dev/null | head -1)
+	cs=$(adl_tl_seconds "$cur")
+	ns=$(adl_tl_seconds "$spec")
+	if [ "$ns" -ge "$cs" ]; then
+		note "current limit $cur already fits the gap; leaving it alone"
+		return 1
+	fi
+
+	note "trimming TimeLimit $cur -> $spec so it fits before maintenance"
+	# The prototype wrote `>&2 2>&1`, which is backwards: it points stdout at
+	# stderr and then points stderr back at the original stdout, which here is
+	# the SSH tunnel. Redirect to the log instead so neither can reach stdout.
+	scontrol update jobid="$pj" TimeLimit="$spec" >>"$LOGFILE" 2>&1 || {
+		note "scontrol update failed; leaving the job alone"
+		return 1
+	}
+	settle "$tries" && {
+		note "job $pj now RUNNING on $(adl_node)"
+		return 0
+	}
+	note "job $pj still not running after the trim"
+	return 1
+}
+
+# --------------------------------------------------------------------------
+
+node=$(adl_node)
+
+# Case 1: something is pending. Repair before provisioning anything new, or
+# `dev-session ensure` blocks for five minutes on a job that can never start
+# and the editor kills us before we can explain why.
+if [ -z "$node" ]; then
+	repair_pending 20 || true # <= 60s
+	node=$(adl_node)
+fi
+
+# Case 2: nothing allocated at all.
+if [ -z "$node" ]; then
+	if adl_maint_open; then
+		# shellcheck disable=SC2046  # deliberate split into $1 start, $2 end
+		set -- $(adl_maint_window)
+		fail "maintenance until ${2:-the published end}, cannot schedule."
+	fi
+
+	note "no allocation; provisioning"
+	# flock serialises concurrent connections so several editor windows starting
+	# at once cannot each submit their own sbatch. `dev-session ensure` is
+	# idempotent, so a waiter simply reports the job the holder made.
+	#
+	# The lock file is on GPFS, where advisory locking is not always reliable.
+	# It held for three concurrent holders on 2026-08-15, and because ensure is
+	# idempotent the worst case is a duplicate submission, not corruption.
+	timeout 150 flock -w 120 "$HOME/.amarel-dev.lock" \
+		timeout 120 "$HOME/bin/dev-session" ensure >>"$LOGFILE" 2>&1
+	node=$(adl_node)
+
+	# The job just submitted may itself collide with a reservation.
+	if [ -z "$node" ]; then
+		repair_pending 10 || true # <= 30s
+		node=$(adl_node)
+	fi
+fi
+
+if [ -z "$node" ]; then
+	pj=$(adl_job_pending)
+	if [ -n "$pj" ]; then
+		fail "job $pj is queued ($(adl_pending_reason "$pj")) and has not started."
+	fi
+	fail "no running job and it could not be provisioned. Try: ssh amarel-jump bin/dev-session ensure."
+fi
+
+note "connecting to $node"
+
+# `-i 120s`, never a bare `nc`.
+#
+# Neither node sets ClientAliveInterval, so a dropped VPN falls back to kernel
+# TCP keepalive: tcp_keepalive_time 7200 + 9 x 75 = 7875s, about 2h11m. Without
+# the flag every VPN drop or closed lid strands an `nc` on the LOGIN NODE for
+# that long, and several drops a day means several strays. Login node resource
+# use is precisely OARC's complaint, so this is hygiene. It ends no job.
+#
+# COUPLED NUMBER, IN A DIFFERENT FILE: the 120s only works because the laptop's
+# ssh_config sets `ServerAliveInterval 15` on Host amarel-dev. Measured
+# 2026-08-20: with ServerAliveInterval 15 and `nc -i 120s`, 45s idle survives;
+# with no keepalive and `nc -i 20s`, 45s idle gives "Ncat: Idle timeout
+# expired". Change one and you must change the other.
+exec nc -i 120s "$node" 22
