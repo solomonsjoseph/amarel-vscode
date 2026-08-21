@@ -16,8 +16,20 @@
 # code. Do not move it back.
 #
 # STDOUT IS THE SSH TUNNEL. Every byte written to stdout is fed into the SSH
-# byte stream and corrupts the handshake. Only `nc` may own stdout. Progress
-# notes go to the log file, never to the terminal.
+# byte stream. Only `nc` may own stdout. Progress notes go to the log file,
+# never to the terminal.
+#
+# Measured 2026-08-21, and narrower than an earlier draft of this comment
+# claimed: one whole line emitted BEFORE the server's identification string is
+# tolerated. RFC 4253 section 4.2 says the server "MAY send other lines of data
+# before sending the version string" and "Clients MUST be able to process such
+# lines". A test that appended `echo NOISE-TEST-PHASE13` to the cluster
+# ~/.bashrc still connected to gpuk008, with the noise printed above it.
+#
+# What is NOT tolerated: anything written after the banner, a partial line, and
+# any line beginning with "SSH-" (the RFC forbids those). The setup's hard gate
+# still refuses ANY output, because the difference is not worth betting a
+# connection on and the noise is printed to the user on every single connect.
 #
 # DO NOT ADD A RETRY LOOP. The editor already retries on its own schedule; a
 # loop here multiplies against it and recreates the endless reconnect this
@@ -124,8 +136,8 @@ fi
 
 # Poll for the job to enter RUNNING. $1 = attempts, 3s apart.
 settle() {
-	local i n
-	for i in $(seq 1 "$1"); do
+	local n
+	for _ in $(seq 1 "$1"); do
 		sleep 3
 		n=$(adl_node)
 		[ -n "$n" ] && return 0
@@ -142,7 +154,7 @@ settle() {
 # HARD GUARD: this path only ever SHRINKS. Never make it trim up.
 # $1 = settle attempts, 3s each. See the TIME BUDGET above before changing it.
 repair_pending() {
-	local tries pj why spec clamp cur cs ns
+	local tries pj why spec cur cs ns
 	tries="$1"
 	pj=$(adl_job_pending) || return 1
 	[ -n "$pj" ] || return 1
@@ -157,7 +169,8 @@ repair_pending() {
 	esac
 
 	note "job $pj blocked by maintenance reservation: $why"
-	IFS='|' read -r spec clamp <<<"$(adl_clamp_walltime "$ADL_WALLTIME" "$ADL_PARTITION")"
+	# The reason half is discarded here: this path logs its own, more specific line.
+	IFS='|' read -r spec _ <<<"$(adl_clamp_walltime "$ADL_WALLTIME" "$ADL_PARTITION")"
 	cur=$(squeue -h -j "$pj" -o '%l' 2>/dev/null | head -1)
 	cs=$(adl_tl_seconds "$cur")
 	ns=$(adl_tl_seconds "$spec")

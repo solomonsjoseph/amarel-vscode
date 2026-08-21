@@ -2480,8 +2480,12 @@ grep -q '^Host amarel-jump$' ~/.ssh/config && grep -q '^Host amarel-dev$' ~/.ssh
 
 **This is a refusal, not a warning.** The `ProxyCommand`'s stdout *is* the SSH
 tunnel. Every byte a chatty `~/.bashrc` writes to stdout is fed into the byte
-stream and corrupts the handshake, and the failure is unreadable. Check before
-writing any config:
+stream. Measured 2026-08-21: one clean line before the SSH banner is tolerated,
+because RFC 4253 section 4.2 requires clients to process lines sent before the
+identification string. Output after the banner, a partial line, or a line
+starting with `SSH-` is not. Refuse on any output regardless: the difference is
+not worth betting a connection on, and the noise is printed to the user on every
+connect. Check before writing any config:
 
 [EXEC]
 ```bash

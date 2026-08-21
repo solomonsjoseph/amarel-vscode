@@ -10,14 +10,16 @@ Account `sj1136`, laptop macOS, cluster `amarel-new.hpc.rutgers.edu`
 
 | Path | SHA-256 |
 |---|---|
-| cluster `~/bin/amarel-dev-lib` | `24446eb8d662acdc8f16c1b6fd7398bd3716275da3f3d971dffdcff2d8764813` |
-| cluster `~/bin/dev-session` | `dabc2bcb2892ee8ca740a6d541660a56b5091a9785c0359c2712c2a9a3b686ad` |
-| cluster `~/bin/amarel-dev-connect` | `01e4619697be2306074ca7c1bc7b6010b32a29c17459e5327ccac61b79a3deda` |
+| cluster `~/bin/amarel-dev-lib` | `604970fc6b84bf73fec378eac55e7dc6e87d035a7b6303cb786685b21ed51cf6` |
+| cluster `~/bin/dev-session` | `4286da0d480cd810e4445cc80613bd4a7635084a4eb3591b17b5e7fa5885cef5` |
+| cluster `~/bin/amarel-dev-connect` | `46326e33b41f9e672729541add49f4f3dad148b02903e40fbd3caeefc56441b6` |
 | cluster `~/.amarel-dev.conf` | mode 600, partition p_wj183_1, 4 cores, 16G, 3-00:00:00 |
 | cluster `~/.bash_profile` | lines 18-88 replaced by the marked block |
 | laptop `~/.ssh/config` | `amarel-dev` ProxyCommand rewired |
 
-All three checksums match the committed files at `a668e93`.
+All three checksums match the committed files as of the stage 2 comment fixes.
+Re-installed and re-verified after that change: selftest OK, status RUNNING on
+gpuk008, warm connect 0.34s.
 
 Backups kept: cluster `~/.bash_profile.bak-phase13-20260821-104606`,
 `~/bin/dev-session.bak-phase13-20260821-102448`, laptop
@@ -67,19 +69,19 @@ Numbering follows the plan.
 
 | # | Item | Result |
 |---|---|---|
-| 1 | `setup.sh` Phase 13 writes both blocks | PENDING, stage 2. Installed by hand today |
+| 1 | `setup.sh` Phase 13 writes both blocks | PASS. Both blocks written by setup.sh, warm connect 0.61s to gpuk008, re-run skipped every phase |
 | 2 | `ssh amarel-dev hostname` returns a compute node | PASS. gpuk012, then gpuk008, never amarel3/4 |
 | 3 | Cold path provisions unaided | PASS. CLI 6.7s, and a deliberate Remote Window click landed on gpuk008 at 10:59 |
 | 4 | Stale master | PASS. Broken pipe, fallback, new job, 10.5s |
-| 5 | Dirty shell refusal | PENDING, stage 2. The gate itself reads 0 bytes today |
+| 5 | Dirty shell refusal | PASS, with a correction. See below |
 | 6 | Maintenance refusal | PENDING, needs the 2026-09-15 window |
 | 7 | Trim path | PENDING, needs the collision zone from 2026-09-12 |
 | 8 | Generic partition | PASS. main, hal0198, TIME_LIMIT 3-00:00:00 from sinfo |
 | 9 | Source Control on a compute node | PASS in part. git 2.55.0 resolves and runs on gpuk008 |
-| 10 | Session length question | PENDING, stage 2, skill lane |
+| 10 | Session length question | PENDING. Both lanes are written; neither has been exercised, because ~/.amarel-dev.conf already exists and is deliberately preserved |
 | 11 | Windows | DEFERRED by the user on 2026-08-21, after the macOS path is finished |
 | 12 | Where the stderr line appears | PENDING, needs 2026-09-15 |
-| 13 | Reset removes everything | PENDING, stage 2 |
+| 13 | Reset removes everything | PARTIAL. Logic verified offline; not run against the live account |
 
 ### Timings
 
@@ -145,8 +147,17 @@ windows probe  adl_windows  ->  1 and 2 at different points, tracking real attac
 
 All six SLURM time forms, both dashed and dashless. Conf parsing accepts a good
 file and rejects `main; rm -rf /`, `-4`, `lots`, `4h` and `../escape`, falling
-back to defaults with a warning each. `shellcheck -S warning` clean on all
-three scripts.
+back to defaults with a warning each.
+
+**Correction.** An earlier version of this log said `shellcheck -S warning` was
+clean on all three scripts. It was not: there were nine SC2034 findings across
+the three (four in the lib, three in connect, two in dev-session), all of them
+false positives. They are now actually resolved rather than merely claimed:
+unused loop counters became `for _ in`, the discarded half of the clamp read
+became `_`, three stale `local` declarations were dropped, and the lib carries
+one targeted `# shellcheck disable=SC2034` because shellcheck cannot see that a
+sourcing script consumes those settings. `shellcheck -x -S warning` now reports
+clean on each file individually.
 
 ## Defects found and fixed while testing
 
@@ -159,6 +170,53 @@ three scripts.
    prototype had this wrong in all three copies.
 3. The selftest printed the next maintenance date twice, from a
    `${m:+...}${m:-...}` pair that both expand when `m` is set.
+
+4. Three comments, and this log, overstated what stray stdout does to the
+   tunnel. See the item 5 finding below. Corrected in `amarel-dev-lib`,
+   `amarel-dev-connect`, `setup.sh`, `SKILL.md` and `AGENTS.md`.
+
+## Item 5, the dirty shell refusal, and what it actually proved
+
+Tested by appending `echo NOISE-TEST-PHASE13` to the cluster `~/.bashrc`, then
+restoring it from the backup taken in the same command.
+
+```
+gate probe   ssh <host> true | wc -c    ->  19        the gate fires correctly
+what it saw  NOISE-TEST-PHASE13
+tunnel       ssh amarel-dev hostname -s ->  gpuk008   IT STILL CONNECTED
+after restore  gate probe 0 bytes, connect gpuk008
+```
+
+The gate works. The stated reason for it did not survive the test. Three code
+comments claimed that any byte on stdout corrupts the handshake, and it does
+not: RFC 4253 section 4.2 says the server "MAY send other lines of data before
+sending the version string" and "Clients MUST be able to process such lines".
+A whole line before the SSH identification string is therefore legal and was
+tolerated, with the noise printed above the result.
+
+What is still not tolerated: output after the banner, a partial line, and any
+line beginning with `SSH-`, which the RFC forbids. The gate stays a refusal
+rather than a warning, because the difference is not worth betting a connection
+on and the noise is printed to the user on every single connect. The comments
+now say that instead of the overstatement.
+
+## Item 13, what was and was not tested
+
+The reset was not run against the live account: a `full` reset deletes the key
+pair and the working session, and that is the user's call rather than mine.
+What was verified offline:
+
+```
+awk on the real ~/.ssh/config   all three amarel blocks and their comment runs
+                                removed; the user's own Host rutgers.edu intact
+awk on a synthetic edge case    stanzas either side of the removed block intact
+PowerShell twin                 no PowerShell on this machine. Logic ported to
+                                python and diffed against the awk on both
+                                files: identical output. Syntax unverified
+bash_profile marker deletion    tested against the real markers at lines 1 and
+                                71 of cluster/bash_profile_block.sh
+extracted reset.sh              bash -n clean, shellcheck -S warning clean
+```
 
 ## Still live on the laptop, deliberately
 

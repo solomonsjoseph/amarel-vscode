@@ -89,8 +89,7 @@ cmd_ensure() {
 	fi
 
 	# Wait for it to start. The ssh alias cannot resolve a node until then.
-	local i
-	for i in $(seq 1 60); do
+	for _ in $(seq 1 60); do
 		node=$(adl_node)
 		if [ -n "$node" ]; then
 			say "running on $node"

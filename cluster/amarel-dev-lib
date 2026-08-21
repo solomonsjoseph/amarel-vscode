@@ -11,7 +11,8 @@
 # Every function writes diagnostics to stderr. Nothing here writes to stdout
 # except the functions documented as printing a value, because
 # `amarel-dev-connect` runs as an SSH ProxyCommand where stdout IS the tunnel
-# and a stray byte corrupts the handshake.
+# and stray output can corrupt the handshake. See amarel-dev-connect's header
+# for exactly which stray output is tolerated and which is not.
 
 # --------------------------------------------------------------------------
 # Configuration
@@ -33,6 +34,9 @@ ADL_LOG_DIR="$HOME/.amarel-dev-logs"
 
 adl_warn() { printf '%s\n' "$*" >&2; }
 
+# SC2034: the ADL_* settings below are read by dev-session and amarel-dev-connect,
+# which source this file. shellcheck cannot see across that boundary.
+# shellcheck disable=SC2034
 adl_load_conf() {
 	local line key val
 

@@ -958,9 +958,14 @@ phase_compute_session() {
 
   # ── Hard gate: the remote shell must be silent on stdout ───────────────────
   # Every byte a chatty ~/.bashrc writes to stdout is fed into the SSH byte
-  # stream and corrupts the ProxyCommand handshake. This is a refusal, not a
-  # warning: a config written over a dirty shell produces a tunnel that fails
-  # in a way nobody can read.
+  # stream. Measured 2026-08-21: a single clean line before the SSH banner is
+  # actually tolerated, because RFC 4253 section 4.2 requires clients to process
+  # lines sent before the identification string. Output after the banner, a
+  # partial line, or a line starting with "SSH-" is not tolerated.
+  #
+  # This stays a refusal rather than a warning anyway: the difference is not
+  # worth betting a connection on, and the noise is printed to the user on every
+  # connect.
   # `|| true` on every probe in this phase: setup.sh runs under `set -e`, and a
   # failed assignment or a short-circuited && would abort the whole script.
   local noise=""
@@ -968,7 +973,7 @@ phase_compute_session() {
   if [[ -n "$noise" ]]; then
     err "Your Amarel shell prints to stdout on a plain 'ssh <host> true':"
     printf '%s\n' "$noise" | sed 's/^/      /'
-    err "That output would corrupt the amarel-dev tunnel, so Phase 9.6 is stopping here."
+    err "That output rides on the amarel-dev tunnel, so Phase 9.6 is stopping here."
     say "  Fix: wrap the offending lines in your Amarel ~/.bashrc with"
     say "       case \$- in *i*) ;; *) return ;; esac"
     say "  then re-run this script."
