@@ -80,7 +80,14 @@ is skipped. Phase 5.5 detects which host you are on and routes accordingly.
 
 ## How to run this skill (read this first)
 
-**Two entry modes — decide before Phase 0.**
+**Two entry modes — decide before Phase 0.** Both modes below run **Phase 0.1
+(fresh start or resume?) right after Phase 0's preflight, before any other
+work.** This is a mandatory gate, not something the skip-probes (Phase 1.0,
+3.0, 4.0/4.2, etc.) can substitute for: those probes only detect what state
+already exists, they never ask the user whether they want to keep or wipe
+it. Do not jump from Phase 0's preflight straight into a skip-probe (Phase
+1.0 Gate 1/2 or Phase 0.2's targeted-repair check) without asking Phase 0.1
+first.
 - **Full setup** (first-time VS Code-on-Amarel): run Phases 0 → 13 in order,
   with one exception: **Phase 13 is optional and comes after Phase 12**, and
   Phase 10's target depends on whether it ran. Phase 13
@@ -478,8 +485,8 @@ fi
 # Gate 2: ssh_config block has all required keys
 CFG=$(ssh -G amarel-new.hpc.rutgers.edu 2>/dev/null)
 echo "$CFG" | grep -qE '^identityfile.*id_ed25519_amarel' && \
-echo "$CFG" | grep -qE '^identitiesonly yes' && \
-echo "$CFG" | grep -qE '^addkeystoagent yes' && \
+echo "$CFG" | grep -qE '^identitiesonly (yes|true)' && \
+echo "$CFG" | grep -qE '^addkeystoagent (yes|true)' && \
 echo "$CFG" | grep -qE '^user <NetID>$' && CONFIG_OK=0 || CONFIG_OK=1
 
 if [ "$KEY_OK" -eq 0 ] && [ "$CONFIG_OK" -eq 0 ]; then
@@ -503,8 +510,8 @@ if (Test-Path "$HOME\.ssh\id_ed25519_amarel.pub") {
 }
 $cfg = & ssh -G amarel-new.hpc.rutgers.edu 2>$null
 $configOk = ($cfg -match 'identityfile.*id_ed25519_amarel') -and
-            ($cfg -match 'identitiesonly yes') -and
-            ($cfg -match 'addkeystoagent yes') -and
+            ($cfg -match 'identitiesonly (yes|true)') -and
+            ($cfg -match 'addkeystoagent (yes|true)') -and
             ($cfg -match '^user <NetID>$')
 if ($keyOk -and $configOk) { "SKIP: key auth + ssh_config already correct — skipping Phases 1–5" }
 else { "PROCEED: running key auth setup" }
@@ -1003,7 +1010,7 @@ manually, or run `Repair-AuthorizedKeyPermission`.
 
 [VERIFY]
 Command:  ssh -G amarel-new.hpc.rutgers.edu | grep -E …
-Pass:     all four lines present: user <NetID>, identityfile id_ed25519_amarel, identitiesonly yes, addkeystoagent yes
+Pass:     all four lines present: user <NetID>, identityfile id_ed25519_amarel, identitiesonly (yes or true), addkeystoagent (yes or true)
 Fail:     any of the four lines missing or wrong value
 On fail:  re-edit ~/.ssh/config per decision logic above; re-verify
 Advance:  Phase 4.4 (macOS) or Phase 5 (Linux/Windows)
@@ -1012,7 +1019,10 @@ ssh -G amarel-new.hpc.rutgers.edu | grep -E '^(user|identityfile|identitiesonly|
 ```
 
 Must show `user <NetID>`, `identityfile ~/.ssh/id_ed25519_amarel`,
-`identitiesonly yes`, `addkeystoagent yes`.
+`identitiesonly yes` or `identitiesonly true`, `addkeystoagent yes` or
+`addkeystoagent true`. Some OpenSSH builds normalize these boolean keywords to
+`true` instead of `yes` in `ssh -G` output — that is not a failure, matching
+the widened Phase 1.0 skip-probe regex.
 
 **Wait for verification to pass, then advance.**
 
@@ -2653,7 +2663,7 @@ day: `main`, `cmain` and `nonpre` are tier 10, `cmem` and `mem` are 20,
 tier 40 because it is `OverSubscribe=FORCE:5`, which shares each CPU five ways
 and caps at one day.
 
-Offer the first `lab` row (a `p_*` partition, their group's own hardware) if
+Pick the first `lab` row (a `p_*` partition, their group's own hardware) if
 there is one: it is the safest and does not spend the user's general allocation.
 Otherwise take the first `general` row. **If that row's tier is under 40, say so
 plainly** rather than quietly accepting it:
@@ -2662,6 +2672,18 @@ plainly** rather than quietly accepting it:
 > requeue your session with no warning, and your editor just sees the connection
 > die. If your group owns a partition, use that instead. `dev-session status`
 > keeps warning you while you are on a preemptible one.
+
+**State the pick and ask before writing anything.** Detecting the partition
+is not the same as choosing it on the user's behalf — a user with more than
+one lab partition, or one who deliberately wants a general partition instead
+of spending their group's shared hardware, needs a say before it's locked in
+and used through 13.4-13.7:
+
+> Detected partition: `<PARTITION>` (`<lab or general>`, tier `<N>`). Use this
+> one, or would you rather pick a different partition from the list above?
+
+Wait for a real answer before continuing to 13.3. If the user names a
+different partition from the detected list, use that one instead.
 
 If nothing accepts a test submission, stop and tell the user to check `sinfo`
 and their account associations.
@@ -2724,20 +2746,30 @@ explicitly rather than trusting the source file's mode.
 Then the conf, **only if 13.2 ran**. Substitute the partition and walltime you
 settled on:
 
+Both heredocs below are fully quoted (`<<'REMOTE'` and `<<'CONF'`), so nothing
+is locally- or remotely-interpolated except `<PARTITION>`/`<WALLTIME>`, which
+you substitute as literal text before running this — same as `<NetID>`
+elsewhere. Do **not** write `AMAREL_DEV_LOG_DIR` here: the library already
+defaults it to `$HOME/.amarel-dev-logs` when the key is absent
+(`cluster/amarel-dev-lib`), and `adl_valid_path` rejects any value containing
+`$` outright, so a literal `$HOME` placed in the file by mistake (e.g. from an
+earlier version of this step that required escaping it as `\$HOME` in an
+unquoted heredoc) fails validation rather than expanding — better to not need
+the escaping at all:
+
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<REMOTE
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'REMOTE'
 set -uo pipefail
-cat > "\$HOME/.amarel-dev.conf" <<CONF
+cat > ~/.amarel-dev.conf <<'CONF'
 # ~/.amarel-dev.conf, written by the amarel-vscode skill, Phase 13.
 # Safe to edit. Parsed as KEY=VALUE, never sourced as shell.
 AMAREL_DEV_PARTITION=<PARTITION>
 AMAREL_DEV_CPUS=4
 AMAREL_DEV_MEM=16G
 AMAREL_DEV_WALLTIME=<WALLTIME>
-AMAREL_DEV_LOG_DIR=\$HOME/.amarel-dev-logs
 CONF
-chmod 600 "\$HOME/.amarel-dev.conf"
+chmod 600 ~/.amarel-dev.conf
 REMOTE
 ```
 
@@ -3447,12 +3479,13 @@ set -u
 # would hold its cores until walltime (up to 3 days).
 for j in $(squeue -h -u "$USER" -n amarel-dev -o '%i' 2>/dev/null); do scancel "$j" 2>/dev/null; done
 rm -f ~/bin/amarel-dev-lib ~/bin/dev-session ~/bin/amarel-dev-connect ~/.amarel-dev.conf ~/.amarel-dev.lock
+rm -f ~/bin/dev-session.bak-* ~/bin/amarel-dev-lib.bak-* ~/bin/amarel-dev-connect.bak-*
 rm -rf ~/.amarel-dev-logs
-[ -f ~/.bash_profile ] && sed -i.bak "/^# >>> amarel-vscode phase 13 >>>$/,/^# <<< amarel-vscode phase 13 <<</d" ~/.bash_profile
-sed -i.bak "/amarel-vscode/d" ~/.ssh/authorized_keys 2>/dev/null
+if [ -f ~/.bash_profile ]; then sed -i.bak "/^# >>> amarel-vscode phase 13 >>>$/,/^# <<< amarel-vscode phase 13 <<</d" ~/.bash_profile && rm -f ~/.bash_profile.bak; fi
+sed -i.bak "/amarel-vscode/d" ~/.ssh/authorized_keys 2>/dev/null && rm -f ~/.ssh/authorized_keys.bak
 rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz ~/.vscode-server/bin ~/.vscode-server/cli
 rm -f ~/.vscode-server/git-modern.sh
-[ -f ~/.bashrc ] && sed -i.bak -e "/# VS Code Server custom glibc workaround/d" -e "\#vscode-server/sysroot\.sh#d" ~/.bashrc
+if [ -f ~/.bashrc ]; then sed -i.bak -e "/# VS Code Server custom glibc workaround/d" -e "\#vscode-server/sysroot\.sh#d" ~/.bashrc && rm -f ~/.bashrc.bak; fi
 # Return the remote Machine settings.json to its pre-skill state: drop ONLY the
 # two keys the skill wrote (git.path, extensions.verifySignature); keep user keys.
 SETTINGS="$HOME/.vscode-server/data/Machine/settings.json"
@@ -3493,7 +3526,7 @@ else
 fi
 
 # 2) Remove the Amarel ssh-add block from ~/.zshrc (marker + the line after it)
-[ -f ~/.zshrc ] && sed -i.bak '/# Amarel HPC — re-load SSH key from Keychain/,+1d' ~/.zshrc && echo "✓ ~/.zshrc cleaned"
+[ -f ~/.zshrc ] && sed -i.bak '/# Amarel HPC — re-load SSH key from Keychain/,+1d' ~/.zshrc && rm -f ~/.zshrc.bak && echo "✓ ~/.zshrc cleaned"
 
 # 3) Remove ONLY the skill-authored Host amarel-new.hpc.rutgers.edu block from ~/.ssh/config
 if [ -f ~/.ssh/config ]; then
@@ -3515,13 +3548,13 @@ if [ -f ~/.ssh/config ]; then
       else { skip=0 }
     }
     { print }
-  ' ~/.ssh/config.bak > ~/.ssh/config && chmod 600 ~/.ssh/config && echo "✓ ~/.ssh/config: amarel, amarel-jump and amarel-dev blocks removed (others kept)"
+  ' ~/.ssh/config.bak > ~/.ssh/config && chmod 600 ~/.ssh/config && rm -f ~/.ssh/config.bak && echo "✓ ~/.ssh/config: amarel, amarel-jump and amarel-dev blocks removed (others kept)"
   # Only if it is empty: a non-empty one holds live control sockets.
   rmdir ~/.ssh/cm 2>/dev/null && echo "✓ ~/.ssh/cm removed (was empty)"
 fi
 
 # 4) Remove all amarel-new.hpc.rutgers.edu lines (any algorithm) from known_hosts
-[ -f ~/.ssh/known_hosts ] && sed -E -i.bak '/^amarel(-new\.hpc)?\.rutgers\.edu /d' ~/.ssh/known_hosts && echo "✓ known_hosts: amarel entries removed"
+[ -f ~/.ssh/known_hosts ] && sed -E -i.bak '/^amarel(-new\.hpc)?\.rutgers\.edu /d' ~/.ssh/known_hosts && rm -f ~/.ssh/known_hosts.bak && echo "✓ known_hosts: amarel entries removed"
 
 # 5) Wiping agent keys and local key pair if FULL
 if [ "$MODE" = "full" ]; then
@@ -3572,7 +3605,7 @@ Set-StrictMode -Version Latest
 
 # 1) FULL or CONFIG: Amarel-side cleanup/dedupe first, while SSH config and keys are fully intact!
 if ($Mode -eq 'full') {
-  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu "for j in `$(squeue -h -u `$USER -n amarel-dev -o '%i' 2>/dev/null); do scancel `$j 2>/dev/null; done; rm -f ~/bin/amarel-dev-lib ~/bin/dev-session ~/bin/amarel-dev-connect ~/.amarel-dev.conf ~/.amarel-dev.lock; rm -rf ~/.amarel-dev-logs; [ -f ~/.bash_profile ] && sed -i.bak '/^# >>> amarel-vscode phase 13 >>>`$/,/^# <<< amarel-vscode phase 13 <<</d' ~/.bash_profile; sed -i.bak '/amarel-vscode/d' ~/.ssh/authorized_keys 2>/dev/null; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz ~/.vscode-server/bin ~/.vscode-server/cli; rm -f ~/.vscode-server/git-modern.sh; [ -f ~/.bashrc ] && sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc; if command -v python3 >/dev/null 2>&1; then python3 -c 'import json,os;p=os.path.expanduser(`"~/.vscode-server/data/Machine/settings.json`");d=(json.load(open(p)) if os.path.exists(p) and os.path.getsize(p)>0 else {});d=(d if isinstance(d,dict) else {});[d.pop(k,None) for k in (`"git.path`",`"extensions.verifySignature`")];open(p,`"w`").write(json.dumps(d,indent=4)+chr(10))' 2>/dev/null; elif command -v jq >/dev/null 2>&1; then jq 'del(.`"git.path`", .`"extensions.verifySignature`")' ~/.vscode-server/data/Machine/settings.json > ~/.vscode-server/data/Machine/settings.json.tmp 2>/dev/null && mv -f ~/.vscode-server/data/Machine/settings.json.tmp ~/.vscode-server/data/Machine/settings.json; fi; true" 2>$null
+  & ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu "for j in `$(squeue -h -u `$USER -n amarel-dev -o '%i' 2>/dev/null); do scancel `$j 2>/dev/null; done; rm -f ~/bin/amarel-dev-lib ~/bin/dev-session ~/bin/amarel-dev-connect ~/.amarel-dev.conf ~/.amarel-dev.lock; rm -f ~/bin/dev-session.bak-* ~/bin/amarel-dev-lib.bak-* ~/bin/amarel-dev-connect.bak-*; rm -rf ~/.amarel-dev-logs; if [ -f ~/.bash_profile ]; then sed -i.bak '/^# >>> amarel-vscode phase 13 >>>`$/,/^# <<< amarel-vscode phase 13 <<</d' ~/.bash_profile && rm -f ~/.bash_profile.bak; fi; sed -i.bak '/amarel-vscode/d' ~/.ssh/authorized_keys 2>/dev/null && rm -f ~/.ssh/authorized_keys.bak; rm -rf ~/.vscode-server/sysroot ~/.vscode-server/sysroot.sh ~/sysroot.sh ~/vscode-sysroot-x86_64-linux-gnu.tgz ~/.vscode-server/bin ~/.vscode-server/cli; rm -f ~/.vscode-server/git-modern.sh; if [ -f ~/.bashrc ]; then sed -i.bak -e '/# VS Code Server custom glibc workaround/d' -e '\#vscode-server/sysroot\.sh#d' ~/.bashrc && rm -f ~/.bashrc.bak; fi; if command -v python3 >/dev/null 2>&1; then python3 -c 'import json,os;p=os.path.expanduser(`"~/.vscode-server/data/Machine/settings.json`");d=(json.load(open(p)) if os.path.exists(p) and os.path.getsize(p)>0 else {});d=(d if isinstance(d,dict) else {});[d.pop(k,None) for k in (`"git.path`",`"extensions.verifySignature`")];open(p,`"w`").write(json.dumps(d,indent=4)+chr(10))' 2>/dev/null; elif command -v jq >/dev/null 2>&1; then jq 'del(.`"git.path`", .`"extensions.verifySignature`")' ~/.vscode-server/data/Machine/settings.json > ~/.vscode-server/data/Machine/settings.json.tmp 2>/dev/null && mv -f ~/.vscode-server/data/Machine/settings.json.tmp ~/.vscode-server/data/Machine/settings.json; fi; true" 2>$null
   if ($LASTEXITCODE -eq 0) { "✓ Amarel: skill key, sysroot, ~/.bashrc loader, git-modern.sh, and git.path/verifySignature settings removed" } else { "• Skipped Amarel cleanup (key auth not active — Phase 3/7 re-install, or clean manually)" }
 } else {
   & ssh -o BatchMode=yes -o ConnectTimeout=5 -i "$HOME\.ssh\id_ed25519_amarel" -o IdentitiesOnly=yes <NetID>@amarel-new.hpc.rutgers.edu "sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys" 2>$null
@@ -3604,6 +3637,7 @@ if (Test-Path $config) {
     if (-not $mode) { $out.Add($line) }
   }
   Set-Content -Path $config -Value $out -Encoding UTF8
+  Remove-Item -Force "$config.bak" -ErrorAction SilentlyContinue
   "✓ ${config}: amarel, amarel-jump and amarel-dev blocks removed (others kept)"
 }
 
@@ -3613,6 +3647,7 @@ if (Test-Path $knownHosts) {
   Copy-Item $knownHosts "$knownHosts.bak" -Force
   $filtered = Get-Content $knownHosts | Where-Object { $_ -notmatch '^amarel(-new\.hpc)?\.rutgers\.edu ' }
   Set-Content -Path $knownHosts -Value $filtered -Encoding UTF8
+  Remove-Item -Force "$knownHosts.bak" -ErrorAction SilentlyContinue
   "✓ known_hosts: amarel entries removed"
 }
 
