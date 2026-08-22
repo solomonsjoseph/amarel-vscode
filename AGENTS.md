@@ -453,7 +453,7 @@ fi
 # Gate 2: ssh_config block has all required keys
 CFG=$(ssh -G amarel-new.hpc.rutgers.edu 2>/dev/null)
 echo "$CFG" | grep -qE '^identityfile.*id_ed25519_amarel' && \
-echo "$CFG" | grep -qE '^identitiesonly yes' && \
+echo "$CFG" | grep -qE '^identitiesonly (yes|true)' && \
 echo "$CFG" | grep -qE '^addkeystoagent (yes|true)' && \
 echo "$CFG" | grep -qE '^user <NetID>$' && CONFIG_OK=0 || CONFIG_OK=1
 
@@ -478,7 +478,7 @@ if (Test-Path "$HOME\.ssh\id_ed25519_amarel.pub") {
 }
 $cfg = & ssh -G amarel-new.hpc.rutgers.edu 2>$null
 $configOk = ($cfg -match 'identityfile.*id_ed25519_amarel') -and
-            ($cfg -match 'identitiesonly yes') -and
+            ($cfg -match 'identitiesonly (yes|true)') -and
             ($cfg -match 'addkeystoagent (yes|true)') -and
             ($cfg -match '^user <NetID>$')
 if ($keyOk -and $configOk) { "SKIP: key auth + ssh_config already correct — skipping Phases 1–5" }
@@ -2699,20 +2699,30 @@ explicitly rather than trusting the source file's mode.
 Then the conf, **only if 13.2 ran**. Substitute the partition and walltime you
 settled on:
 
+Both heredocs below are fully quoted (`<<'REMOTE'` and `<<'CONF'`), so nothing
+is locally- or remotely-interpolated except `<PARTITION>`/`<WALLTIME>`, which
+you substitute as literal text before running this — same as `<NetID>`
+elsewhere. Do **not** write `AMAREL_DEV_LOG_DIR` here: the library already
+defaults it to `$HOME/.amarel-dev-logs` when the key is absent
+(`cluster/amarel-dev-lib`), and `adl_valid_path` rejects any value containing
+`$` outright, so a literal `$HOME` placed in the file by mistake (e.g. from an
+earlier version of this step that required escaping it as `\$HOME` in an
+unquoted heredoc) fails validation rather than expanding — better to not need
+the escaping at all:
+
 [EXEC]
 ```bash
-ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<REMOTE
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se' <<'REMOTE'
 set -uo pipefail
-cat > "\$HOME/.amarel-dev.conf" <<CONF
+cat > ~/.amarel-dev.conf <<'CONF'
 # ~/.amarel-dev.conf, written by the amarel-vscode skill, Phase 13.
 # Safe to edit. Parsed as KEY=VALUE, never sourced as shell.
 AMAREL_DEV_PARTITION=<PARTITION>
 AMAREL_DEV_CPUS=4
 AMAREL_DEV_MEM=16G
 AMAREL_DEV_WALLTIME=<WALLTIME>
-AMAREL_DEV_LOG_DIR=\$HOME/.amarel-dev-logs
 CONF
-chmod 600 "\$HOME/.amarel-dev.conf"
+chmod 600 ~/.amarel-dev.conf
 REMOTE
 ```
 
