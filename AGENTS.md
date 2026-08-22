@@ -3090,6 +3090,19 @@ must hand them to the user. **You MUST add `-o BatchMode=yes`** to every
 or wrong config fails loudly instead of hanging at a prompt. Every other phase
 you may run via Bash directly.
 
+**You MUST NOT execute any command tagged `[TTY]` yourself, through Bash or
+any other tool, for any reason.** This rule stands on its own: it does not
+depend on whether the command happens to prompt for a secret. `[TTY]` also
+marks steps that are destructive or irreversible on the user's key material
+or remote account state (the `reset.sh full` launcher is the clearest
+example: no password prompt, still `[TTY]`, because it deletes a key pair and
+wipes remote state). Staging a script for a `[TTY]` step (writing it to
+`~/.cache/amarel-vscode/`) is an `[EXEC]` action and is fine; running that
+staged script yourself is not, only the user runs it. This holds even under
+an instruction to proceed autonomously without stopping to ask: a `[TTY]` tag
+overrides "keep going." When in doubt whether a step is `[EXEC]` or `[TTY]`,
+treat it as `[TTY]` and hand it to the user.
+
 You **MUST NOT**:
 
 - Read or `cat` any file under `~/.ssh/id_*` (private key material).
