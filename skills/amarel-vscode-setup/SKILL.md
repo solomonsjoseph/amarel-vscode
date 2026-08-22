@@ -1010,7 +1010,7 @@ manually, or run `Repair-AuthorizedKeyPermission`.
 
 [VERIFY]
 Command:  ssh -G amarel-new.hpc.rutgers.edu | grep -E …
-Pass:     all four lines present: user <NetID>, identityfile id_ed25519_amarel, identitiesonly yes, addkeystoagent yes
+Pass:     all four lines present: user <NetID>, identityfile id_ed25519_amarel, identitiesonly (yes or true), addkeystoagent (yes or true)
 Fail:     any of the four lines missing or wrong value
 On fail:  re-edit ~/.ssh/config per decision logic above; re-verify
 Advance:  Phase 4.4 (macOS) or Phase 5 (Linux/Windows)
@@ -1019,7 +1019,10 @@ ssh -G amarel-new.hpc.rutgers.edu | grep -E '^(user|identityfile|identitiesonly|
 ```
 
 Must show `user <NetID>`, `identityfile ~/.ssh/id_ed25519_amarel`,
-`identitiesonly yes`, `addkeystoagent yes`.
+`identitiesonly yes` or `identitiesonly true`, `addkeystoagent yes` or
+`addkeystoagent true`. Some OpenSSH builds normalize these boolean keywords to
+`true` instead of `yes` in `ssh -G` output — that is not a failure, matching
+the widened Phase 1.0 skip-probe regex.
 
 **Wait for verification to pass, then advance.**
 
