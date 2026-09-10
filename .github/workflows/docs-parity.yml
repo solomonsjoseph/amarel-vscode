@@ -98,8 +98,9 @@ jobs:
           set -euo pipefail
           rc=0
           for f in README.md GEMINI.md CLAUDE.md docs/index.md \
-                   docs/source-control-git-fix.md AGENTS.md \
-                   skills/amarel-vscode-setup/SKILL.md; do
+                   docs/source-control-git-fix.md \
+                   docs/runbook-legacy-centos7.md docs/runbook-dev-mode.md \
+                   AGENTS.md skills/amarel-vscode-setup/SKILL.md; do
             n=$(grep -c '^```' "$f" || true)
             if [ $((n % 2)) -ne 0 ]; then
               echo "ERR: $f has $n fence markers, an odd number, so one is unclosed" >&2
