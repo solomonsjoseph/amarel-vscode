@@ -138,7 +138,9 @@ $body | & ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se'
 and `Get-Content <file> | ssh ... 'cat >> <target>'` replaces a `< somefile`
 redirect. **Phase 13's steps do not yet carry these forms.** That gap is
 tracked in issue #30 and is deliberately not being written blind: see the
-untested-items note in the Dev mode section for why.
+untested-items note in the Dev mode section for why. It covers the session
+management lane too, not just setup: **13.9's walltime change uses a Bash
+heredoc**, so on Windows that step needs the manual route named there.
 
 ### Per-phase protocol
 
@@ -2521,7 +2523,18 @@ git commit --amend --reset-author --no-edit
 Then `git push` again. If more than one commit carries the wrong address, use an
 interactive rebase (`git rebase -i`) and re-stamp each, or `git filter-repo`.
 
-**This is the end of the runbook.**
+**Phases 0 to 12 are a complete setup.** The user has a working editor on
+Amarel over SSH, Source Control finds their repos, and GitHub is authenticated.
+Nothing below this line is required, and a user who stops here has a correct
+result, not a partial one.
+
+**Now offer Phase 13, once, as a question and not as a step.** Phase 13 opens
+with the wording to use and with what to do if they say no. Do not silently
+skip the offer: a user running real work on a login node is the case OARC
+objects to, and they have no way to know the compute session exists to ask for
+it by name.
+
+If they say no, the runbook ends here. Do not ask twice.
 
 ---
 
@@ -2975,7 +2988,15 @@ Expect a compute node name (`gpuk008`, `hal0198`, and so on). **A result of
 `amarel3` or `amarel4` is a failure**, not a pass. First run may take a few
 seconds while a job is submitted and starts; a warm run is well under a second.
 
-Report the node to the user, then go to Phase 10.
+Report the node to the user, then send them back to **Phase 10 to reconnect**,
+picking `amarel-dev` this time instead of the login host, and closing the old
+window.
+
+**That reconnect is the end of the runbook.** Phase 10's own closing text
+routes onward to Phases 11 and 12, which is correct on a first pass and wrong
+here: both are already done by the time anyone reaches 13.8, and following them
+again walks 11 to 12 to 13 to 10 and back with nothing left to change. Take the
+reconnect from Phase 10 and stop.
 
 ### 13.9 — Managing the session (this is lane 2)
 
@@ -3031,6 +3052,17 @@ REMOTE
 
 The `grep` is the check, and it must echo the new value back. Empty output means
 the key was not in the file, so add it rather than assuming the `sed` worked.
+
+**On Windows this step does not run as written.** `<<'REMOTE'` is Bash
+heredoc syntax and PowerShell rejects it before `ssh` is ever invoked, so a
+Windows user who asks for a fresh 8 hour session cannot change the length this
+way, even though the one-shot PowerShell setup may well have installed Phase 13
+for them. This is the same gap as the rest of Phase 13 on Windows, tracked in
+issue #30, and the PowerShell form is deliberately not written here rather than
+written blind: nobody has run Phase 13 on Windows, and an untested here-string
+that silently rewrites a config file is worse than a documented gap. Until it is
+tested, tell a Windows user to edit `~/.amarel-dev.conf` on Amarel directly, over
+a plain `ssh` session, and then continue from the job cycle below.
 
 **Write a real timespec, not the shorthand.** `AMAREL_DEV_WALLTIME=8h` is
 rejected by `adl_valid_timespec` in `cluster/amarel-dev-lib`, and the library

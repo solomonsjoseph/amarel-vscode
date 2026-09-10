@@ -48,6 +48,44 @@ jobs:
           fi
           echo "OK: mirrors identical"
 
+      - name: The execution contract is identical in both runbooks
+        run: |
+          set -euo pipefail
+          # THE MIRROR DIFF ABOVE DOES NOT COVER THIS BLOCK. It starts below
+          # each file's header, and the execution contract lives inside those
+          # headers: AGENTS.md carries it under "How to run this skill",
+          # SKILL.md immediately after its YAML frontmatter. So the five
+          # numbered rules were duplicated by hand and checked by nobody.
+          #
+          # That is the worst possible block to leave unchecked. Rule 2 is the
+          # BatchMode=yes requirement and the key-auth denial scope, and the
+          # surrounding contract is what makes an agent run [EXEC] itself and
+          # never run [TTY]. Those are the security constraints CLAUDE.md calls
+          # non-negotiable. Drift there changes what an agent is permitted to
+          # do, silently, in one runbook and not the other.
+          #
+          # Anchored on the blockquote itself rather than line numbers, because
+          # any edit above it shifts those and a stale number would compare the
+          # wrong text while still reporting OK.
+          extract() {
+            awk '/^> \*\*Execution contract:\*\*/{f=1} f&&/^>/{print} f&&!/^>/{exit}' "$1"
+          }
+          a=$(extract AGENTS.md)
+          k=$(extract skills/amarel-vscode-setup/SKILL.md)
+          if [ -z "$a" ] || [ -z "$k" ]; then
+            echo "ERR: could not find the execution contract in one or both runbooks." >&2
+            echo "It is anchored on a line reading '> **Execution contract:**'." >&2
+            exit 1
+          fi
+          if ! diff <(printf '%s\n' "$a") <(printf '%s\n' "$k"); then
+            echo >&2
+            echo "ERR: the execution contract has drifted between the runbooks." >&2
+            echo "This block governs [EXEC]/[TTY] handling and BatchMode; fix it in" >&2
+            echo "AGENTS.md and copy it verbatim into SKILL.md." >&2
+            exit 1
+          fi
+          echo "OK: execution contract identical ($(printf '%s\n' "$a" | wc -l | tr -d ' ') lines)"
+
       - name: Phase heading titles match
         run: |
           set -euo pipefail
@@ -102,11 +140,29 @@ jobs:
               # A marketplace manifest carries the version under plugins[0]; a
               # plugin manifest carries it at the top level.
               v = d.get("version") or (d.get("plugins") or [{}])[0].get("version")
-              name = d.get("name") or (d.get("plugins") or [{}])[0].get("name")
               if not v:
                   sys.exit(f"ERR: {f} has no version (top level or plugins[0])")
-              if name != "amarel-vscode":
-                  sys.exit(f"ERR: {f} name is {name!r}, expected 'amarel-vscode'")
+
+              # CHECK EVERY NAME THE FILE DECLARES, NOT THE FIRST ONE FOUND.
+              # A marketplace manifest carries two: the marketplace container's
+              # own name, and plugins[0].name, which is the one that actually
+              # names the installable plugin. `d.get("name") or ...` short
+              # circuits on the container and never looks at the entry, so the
+              # nested name could drift to anything and this check would still
+              # report OK while the marketplace pointed at a plugin nobody
+              # ships. Both are asserted now.
+              names = []
+              if "name" in d:
+                  names.append(("name", d["name"]))
+              for i, plug in enumerate(d.get("plugins") or []):
+                  if "name" in plug:
+                      names.append((f"plugins[{i}].name", plug["name"]))
+              if not names:
+                  sys.exit(f"ERR: {f} declares no name at all")
+              for where, got in names:
+                  if got != "amarel-vscode":
+                      sys.exit(f"ERR: {f} {where} is {got!r}, expected 'amarel-vscode'")
+
               found[f] = v
 
           if len(found) != len(FILES):
@@ -120,11 +176,20 @@ jobs:
 
           print(f"OK: all {len(FILES)} manifests at {distinct[0]}, name amarel-vscode")
           PYEOF
+          # BOTH installers, not just the POSIX one. install.ps1 carries the
+          # same constant under a different spelling, and it is what names the
+          # Gemini extension directory on Windows. Checking only install.sh let
+          # the Windows constant drift with CI still green, which is the exact
+          # class of silent divergence this workflow exists to stop.
           if ! grep -q "PLUGIN_NAME=\"amarel-vscode\"" install.sh; then
             echo "ERR: install.sh PLUGIN_NAME no longer matches the manifests" >&2
             exit 1
           fi
-          echo "OK: install.sh PLUGIN_NAME matches"
+          if ! grep -qF "\$PluginName = 'amarel-vscode'" install.ps1; then
+            echo "ERR: install.ps1 \$PluginName no longer matches the manifests" >&2
+            exit 1
+          fi
+          echo "OK: install.sh PLUGIN_NAME and install.ps1 \$PluginName both match"
 
       - name: The two SSH fingerprint pins agree across all three copies
         run: |
@@ -143,11 +208,23 @@ jobs:
             echo "Each host's pin must be byte-identical in all three files." >&2
             exit 1
           fi
+          # COMPARE THE SET, NOT THE COUNT. Counting only proves a file has two
+          # pin-shaped strings. If one copy lost a host's pin to a duplicate of
+          # the other host's, that file still has two matches and the union
+          # across the remaining files is still two, so a count check reports
+          # success while one setup path verifies against a fingerprint that is
+          # real but belongs to the wrong machine. That is the failure this
+          # check exists to prevent, so it has to be set equality.
           for f in scripts/setup.sh scripts/setup.ps1 AGENTS.md; do
-            n=$(grep -coE 'SHA256:[A-Za-z0-9+/=]{40,}' "$f" || true)
-            [ "$n" -ge 2 ] || { echo "ERR: $f carries $n full pins, expected 2" >&2; exit 1; }
+            fp=$(grep -ohE 'SHA256:[A-Za-z0-9+/=]{40,}' "$f" | sort -u)
+            if [ "$fp" != "$pins" ]; then
+              echo "ERR: $f does not carry both pins, exactly once each." >&2
+              echo "  expected:" >&2; printf '%s\n' "$pins" | sed 's/^/    /' >&2
+              echo "  found:"    >&2; printf '%s\n' "$fp"   | sed 's/^/    /' >&2
+              exit 1
+            fi
           done
-          echo "OK: 2 distinct pins, present in all three files"
+          echo "OK: 2 distinct pins, and all three files carry the same two"
           if grep -qE 'SHA256:[A-Za-z0-9+/=]{1,20}…' CLAUDE.md GEMINI.md; then
             echo "ERR: a truncated pin reappeared in CLAUDE.md or GEMINI.md." >&2
             echo "Point at AGENTS.md Phase 2.2 instead of copying the value." >&2
