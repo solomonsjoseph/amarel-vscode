@@ -1,7 +1,7 @@
 # Amarel VS Code Skill
 
-Set up VS Code Remote-SSH on Rutgers Amarel and fix the GLIBC 2.28 error on
-macOS or Windows.
+Set up VS Code Remote-SSH on Rutgers Amarel, run the editor on a **compute node**
+instead of a login node, and fix the GLIBC 2.28 error. macOS, Linux or Windows.
 
 This community-maintained project helps Rutgers Amarel users connect with VS
 Code Remote-SSH. Amarel is migrating from CentOS 7 (glibc 2.17) to RHEL 9.6
@@ -10,6 +10,26 @@ host VS Code Server fails with `expected GLIBC >= v2.28.0`, which this project
 fixes with a custom-glibc sysroot; on RHEL 9.6 it runs natively, and the skill
 auto-detects the host. It works with Claude Code, Codex, other LLM tools, or a
 plain shell/PowerShell script.
+
+## The editor belongs on a compute node
+
+Rutgers OARC kills processes that load a shared login node, and a VS Code Server
+is not a thin client: it runs language servers, file watchers and extensions for
+as long as the window is open. So the setup offers an optional last step that
+books a SLURM job and points an `amarel-dev` SSH alias at whichever compute node
+that job landed on. One click in the Remote-SSH menu then lands you on a compute
+node, first run or hundredth, and a guard on Amarel refuses an editor server on a
+login node from then on.
+
+It is a question, not a step, and it is asked after the rest is working. Saying no
+leaves a complete login-node setup with nothing to undo.
+
+Once it is installed, the skill also manages the session. Ask it things like
+*is my session running*, *how much time is left*, *stop my amarel job*, or
+*give me a fresh 8 hour session*. If a connection fails, tell it so in whatever
+words you have (*it's not working* is enough): the editor's own popup carries no
+reason, so the skill gathers the evidence itself, fixes it, and asks you to
+confirm before recording anything.
 
 This is not an official Rutgers or OARC project.
 
@@ -78,4 +98,6 @@ powershell scripts/setup.ps1
 ## More
 
 See the [main README](../README.md) for prerequisites, security rules,
-troubleshooting, and the full setup flow.
+troubleshooting, and the full setup flow, and
+[source-control-git-fix.md](source-control-git-fix.md) for why Source Control
+reports "no Git repository" on the legacy host and what fixes it.

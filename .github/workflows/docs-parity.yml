@@ -1,0 +1,233 @@
+name: docs-parity
+
+# Catches the MECHANICAL half of documentation drift. It cannot tell you that a
+# paragraph has gone stale, but it can tell you that the two runbook mirrors no
+# longer agree, that a fence is unclosed, that the five plugin manifests
+# disagree on a version, or that a pinned SSH fingerprint stopped matching.
+#
+# Why this exists: between 2026-08-19 and 2026-08-22, twelve commits changed
+# AGENTS.md without touching README.md, and the two mirrors drifted by two lines
+# without anyone noticing. Issue #34 asked to "re-run the doc-consistency checks
+# this repo already uses"; there were none, only prose telling a maintainer to
+# remember. This is that, made mandatory.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Runbook mirrors are byte-identical below their headers
+        run: |
+          set -euo pipefail
+          SK=skills/amarel-vscode-setup/SKILL.md
+          # Locate the frontmatter end dynamically (the second '---') so that
+          # reordering the frontmatter cannot break this check. SKILL.md's own
+          # header runs for 24 lines past it, hence the +25 offset.
+          FM=$(awk 'NR>1 && /^---$/{print NR; exit}' "$SK")
+          if [ -z "${FM:-}" ]; then
+            echo "ERR: could not find the end of SKILL.md's YAML frontmatter" >&2
+            exit 1
+          fi
+          if ! diff <(tail -n +51 AGENTS.md) <(tail -n +$((FM + 25)) "$SK"); then
+            echo >&2
+            echo "ERR: AGENTS.md and SKILL.md have drifted." >&2
+            echo "Rebuild the mirror instead of hand-applying the edit twice:" >&2
+            echo "  { head -82 $SK; tail -n +51 AGENTS.md; } > /tmp/s && mv /tmp/s $SK" >&2
+            exit 1
+          fi
+          echo "OK: mirrors identical"
+
+      - name: The execution contract is identical in both runbooks
+        run: |
+          set -euo pipefail
+          # THE MIRROR DIFF ABOVE DOES NOT COVER THIS BLOCK. It starts below
+          # each file's header, and the execution contract lives inside those
+          # headers: AGENTS.md carries it under "How to run this skill",
+          # SKILL.md immediately after its YAML frontmatter. So the five
+          # numbered rules were duplicated by hand and checked by nobody.
+          #
+          # That is the worst possible block to leave unchecked. Rule 2 is the
+          # BatchMode=yes requirement and the key-auth denial scope, and the
+          # surrounding contract is what makes an agent run [EXEC] itself and
+          # never run [TTY]. Those are the security constraints CLAUDE.md calls
+          # non-negotiable. Drift there changes what an agent is permitted to
+          # do, silently, in one runbook and not the other.
+          #
+          # Anchored on the blockquote itself rather than line numbers, because
+          # any edit above it shifts those and a stale number would compare the
+          # wrong text while still reporting OK.
+          extract() {
+            awk '/^> \*\*Execution contract:\*\*/{f=1} f&&/^>/{print} f&&!/^>/{exit}' "$1"
+          }
+          a=$(extract AGENTS.md)
+          k=$(extract skills/amarel-vscode-setup/SKILL.md)
+          if [ -z "$a" ] || [ -z "$k" ]; then
+            echo "ERR: could not find the execution contract in one or both runbooks." >&2
+            echo "It is anchored on a line reading '> **Execution contract:**'." >&2
+            exit 1
+          fi
+          if ! diff <(printf '%s\n' "$a") <(printf '%s\n' "$k"); then
+            echo >&2
+            echo "ERR: the execution contract has drifted between the runbooks." >&2
+            echo "This block governs [EXEC]/[TTY] handling and BatchMode; fix it in" >&2
+            echo "AGENTS.md and copy it verbatim into SKILL.md." >&2
+            exit 1
+          fi
+          echo "OK: execution contract identical ($(printf '%s\n' "$a" | wc -l | tr -d ' ') lines)"
+
+      - name: Phase heading titles match
+        run: |
+          set -euo pipefail
+          diff <(grep -E '^#{2,4} (Phase )?[0-9]' AGENTS.md) \
+               <(grep -E '^#{2,4} (Phase )?[0-9]' skills/amarel-vscode-setup/SKILL.md)
+          echo "OK: $(grep -cE '^#{2,4} (Phase )?[0-9]' AGENTS.md) phase headings agree"
+
+      - name: Code fences are balanced, and the mirrors agree on the count
+        run: |
+          set -euo pipefail
+          rc=0
+          for f in README.md GEMINI.md CLAUDE.md docs/index.md \
+                   docs/source-control-git-fix.md AGENTS.md \
+                   skills/amarel-vscode-setup/SKILL.md; do
+            n=$(grep -c '^```' "$f" || true)
+            if [ $((n % 2)) -ne 0 ]; then
+              echo "ERR: $f has $n fence markers, an odd number, so one is unclosed" >&2
+              rc=1
+            else
+              printf 'OK: %-45s %s fences\n' "$f" "$n"
+            fi
+          done
+          a=$(grep -c '^```' AGENTS.md || true)
+          s=$(grep -c '^```' skills/amarel-vscode-setup/SKILL.md || true)
+          if [ "$a" -ne "$s" ]; then
+            echo "ERR: AGENTS.md has $a fences but SKILL.md has $s" >&2
+            rc=1
+          fi
+          exit "$rc"
+
+      - name: All five plugin manifests agree on name and version
+        run: |
+          set -euo pipefail
+          # Do the whole comparison in python. An earlier shell version of this
+          # step FAILED OPEN: if the lookup returned nothing, `printf '%s\n' ""`
+          # still emitted one line, `wc -l` said 1, and "all five agree" passed
+          # having read zero versions. Assert the count and reject empties.
+          python3 - <<'PYEOF'
+          import json, sys
+
+          FILES = [
+              ".claude-plugin/plugin.json",
+              ".claude-plugin/marketplace.json",
+              ".codex-plugin/plugin.json",
+              ".agents/plugins/marketplace.json",
+              "gemini-extension.json",
+          ]
+
+          found = {}
+          for f in FILES:
+              d = json.load(open(f))
+              # A marketplace manifest carries the version under plugins[0]; a
+              # plugin manifest carries it at the top level.
+              v = d.get("version") or (d.get("plugins") or [{}])[0].get("version")
+              if not v:
+                  sys.exit(f"ERR: {f} has no version (top level or plugins[0])")
+
+              # CHECK EVERY NAME THE FILE DECLARES, NOT THE FIRST ONE FOUND.
+              # A marketplace manifest carries two: the marketplace container's
+              # own name, and plugins[0].name, which is the one that actually
+              # names the installable plugin. `d.get("name") or ...` short
+              # circuits on the container and never looks at the entry, so the
+              # nested name could drift to anything and this check would still
+              # report OK while the marketplace pointed at a plugin nobody
+              # ships. Both are asserted now.
+              names = []
+              if "name" in d:
+                  names.append(("name", d["name"]))
+              for i, plug in enumerate(d.get("plugins") or []):
+                  if "name" in plug:
+                      names.append((f"plugins[{i}].name", plug["name"]))
+              if not names:
+                  sys.exit(f"ERR: {f} declares no name at all")
+              for where, got in names:
+                  if got != "amarel-vscode":
+                      sys.exit(f"ERR: {f} {where} is {got!r}, expected 'amarel-vscode'")
+
+              found[f] = v
+
+          if len(found) != len(FILES):
+              sys.exit(f"ERR: read {len(found)} manifests, expected {len(FILES)}")
+
+          distinct = sorted(set(found.values()))
+          if len(distinct) != 1:
+              for f, v in found.items():
+                  print(f"  {v}  {f}")
+              sys.exit(f"ERR: manifest versions disagree: {distinct}")
+
+          print(f"OK: all {len(FILES)} manifests at {distinct[0]}, name amarel-vscode")
+          PYEOF
+          # BOTH installers, not just the POSIX one. install.ps1 carries the
+          # same constant under a different spelling, and it is what names the
+          # Gemini extension directory on Windows. Checking only install.sh let
+          # the Windows constant drift with CI still green, which is the exact
+          # class of silent divergence this workflow exists to stop.
+          if ! grep -q "PLUGIN_NAME=\"amarel-vscode\"" install.sh; then
+            echo "ERR: install.sh PLUGIN_NAME no longer matches the manifests" >&2
+            exit 1
+          fi
+          if ! grep -qF "\$PluginName = 'amarel-vscode'" install.ps1; then
+            echo "ERR: install.ps1 \$PluginName no longer matches the manifests" >&2
+            exit 1
+          fi
+          echo "OK: install.sh PLUGIN_NAME and install.ps1 \$PluginName both match"
+
+      - name: The two SSH fingerprint pins agree across all three copies
+        run: |
+          set -euo pipefail
+          # The pins are a security constant and live in exactly three places:
+          # both setup scripts and the Phase 2.2 block in AGENTS.md (mirrored to
+          # SKILL.md, which the first step already proves identical). CLAUDE.md
+          # and GEMINI.md deliberately carry NO pin values; a truncated fourth
+          # and fifth copy is what this check was written after removing.
+          pins=$(grep -rhoE 'SHA256:[A-Za-z0-9+/=]{40,}' \
+                   scripts/setup.sh scripts/setup.ps1 AGENTS.md | sort -u)
+          count=$(printf '%s\n' "$pins" | grep -c . || true)
+          if [ "$count" -ne 2 ]; then
+            echo "ERR: expected exactly 2 distinct full pins, found $count:" >&2
+            printf '%s\n' "$pins" >&2
+            echo "Each host's pin must be byte-identical in all three files." >&2
+            exit 1
+          fi
+          # COMPARE THE SET, NOT THE COUNT. Counting only proves a file has two
+          # pin-shaped strings. If one copy lost a host's pin to a duplicate of
+          # the other host's, that file still has two matches and the union
+          # across the remaining files is still two, so a count check reports
+          # success while one setup path verifies against a fingerprint that is
+          # real but belongs to the wrong machine. That is the failure this
+          # check exists to prevent, so it has to be set equality.
+          for f in scripts/setup.sh scripts/setup.ps1 AGENTS.md; do
+            fp=$(grep -ohE 'SHA256:[A-Za-z0-9+/=]{40,}' "$f" | sort -u)
+            if [ "$fp" != "$pins" ]; then
+              echo "ERR: $f does not carry both pins, exactly once each." >&2
+              echo "  expected:" >&2; printf '%s\n' "$pins" | sed 's/^/    /' >&2
+              echo "  found:"    >&2; printf '%s\n' "$fp"   | sed 's/^/    /' >&2
+              exit 1
+            fi
+          done
+          echo "OK: 2 distinct pins, and all three files carry the same two"
+          if grep -qE 'SHA256:[A-Za-z0-9+/=]{1,20}…' CLAUDE.md GEMINI.md; then
+            echo "ERR: a truncated pin reappeared in CLAUDE.md or GEMINI.md." >&2
+            echo "Point at AGENTS.md Phase 2.2 instead of copying the value." >&2
+            exit 1
+          fi
+          echo "OK: no truncated pin copies"

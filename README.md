@@ -102,18 +102,32 @@ https://github.com/solomonsjoseph/amarel-vscode
 Read its AGENTS.md:
 https://raw.githubusercontent.com/solomonsjoseph/amarel-vscode/main/AGENTS.md
 
+It runs Phases 0 to 13. Phase 13 is optional and is offered after Phase 12,
+so the order is 0 to 12, then 13.
+
 Walk me through it step by step:
 - Give me ONE command at a time in a fenced code block.
 - Tell me the success marker so I know when it worked.
 - Wait for me to paste my terminal output before advancing.
-- Do NOT ask which OS I'm on — Phase 0 detects it automatically.
+- Do NOT ask which OS I'm on. Phase 0 detects it automatically.
 - Do NOT run scripts/setup.sh on my behalf.
+- Ask me Phase 0.1 (fresh start or resume?) right after Phase 0's
+  preflight, before anything else. It is a mandatory gate, and the
+  skip-probes later on do not replace it.
 
 Security rules:
+- Any step tagged [TTY] is mine to run. Hand it to me and wait. Never
+  execute one yourself, even if it prompts for no password, and even if
+  I have told you to work autonomously. This is not negotiable.
 - Never read or display ~/.ssh/id_* private key files.
-- Never use sshpass, expect, or any password-feeding helper.
+- Never use sshpass, expect, or any password-feeding helper, and never
+  query my OS keychain.
+- Never add -o PasswordAuthentication=yes to an ssh or scp you run.
 - I will type my Amarel password and SSH passphrase directly into
-  interactive terminal prompts — never ask me to share them in chat.
+  interactive terminal prompts. Never ask me to share them in chat.
+- If Phase 2's fingerprint does not match the pin, stop. Do not work
+  around it. That is a possible machine-in-the-middle, and the right
+  move is to contact OARC.
 ```
 
 > **Ollama / LM Studio / local LLMs:** smaller models often struggle
@@ -183,23 +197,34 @@ Phase 0 of the skill detects your OS and confirms all of these automatically.
 | Phase | Action |
 |-------|--------|
 | 0 | Preflight — detect OS, check tools, verify VPN reachability |
+| 0.1 | **Fresh start or resume?** Asked before any other work. A guided run must ask this rather than inferring it from what it finds on disk |
 | 1 | Generate a dedicated SSH keypair (`~/.ssh/id_ed25519_amarel`) |
-| 2 | Display Amarel's host fingerprint — you verify it against OARC's published value |
+| 2 | Scan Amarel's host fingerprint and **auto-compare it against the pin recorded in this repo**. A mismatch is a hard stop, not a prompt |
 | 3 | `ssh-copy-id` — install your key on Amarel. **Your last Amarel password prompt ever.** |
-| 4 | `ssh-add` — save your key passphrase to the OS keychain |
+| 4 | `ssh-add` — save your key passphrase to the OS keychain, dedupe `authorized_keys`, and write a strict `ssh_config` block |
 | 5 | Verify passwordless SSH works end-to-end |
 | 5.5 | Detect the remote platform (glibc): RHEL 9.6 → skip the sysroot Phases 6–9; CentOS 7 → run them |
 | 5.5b | *(RHEL 9.6 only)* Strip any legacy sysroot residue left from a prior CentOS 7 setup on the same `$HOME` |
 | 6 | *(legacy CentOS 7 only)* Download the glibc 2.28 sysroot tarball from GitHub Releases, verify SHA-256 |
-| 7 | *(legacy CentOS 7 only)* Copy the tarball to Amarel, extract it, wire up `~/.bashrc` |
-| 8 | *(legacy CentOS 7 only)* Verify the glibc env vars load in a non-interactive SSH session |
+| 7 | *(legacy CentOS 7 only)* Copy the tarball to Amarel, extract it, and hard-verify it through three independent gates |
+| 8 | *(legacy CentOS 7 only)* Wire up `~/.bashrc` and verify the glibc env vars load in a non-interactive SSH session |
 | 9 | *(legacy CentOS 7 only)* Write `"extensions.verifySignature": false` to VS Code Server's settings — needed only when the node binary is patched against the custom glibc |
-| 13 | Install the `amarel-dev` compute-node session: a SLURM holder job, an SSH alias whose `ProxyCommand` resolves that job's node at connect time, and a login-node guard. **Optional, offered after Phase 12.** Phases 0 to 12 are a complete setup on their own; say yes to this one if you run real work on Amarel |
-| 10 | Print the VS Code GUI steps — connect to `amarel-dev` and you're done |
+| 10 | Print the VS Code GUI steps and connect |
 | 11 | Point VS Code at a modern git on Amarel (`git.path`) so Source Control detects your repos — needed on legacy CentOS 7 (stock git 1.8.3.1); on RHEL 9.6 the system git ~2.43 already passes, so nothing is written |
 | 12 | *(Optional)* Authenticate GitHub on Amarel (`gh auth login`) and set your git identity, so commits and pushes work |
+| 13 | *(Optional, and asked after Phase 12)* Install the `amarel-dev` compute-node session: a SLURM holder job, an SSH alias whose `ProxyCommand` resolves that job's node at connect time, and a login-node guard. Phases 0 to 12 are a complete setup on their own; say yes to this one if you run real work on Amarel |
+| 13.9 | Managing the session afterwards: status, a new job, stopping one, or changing its length |
+| 13.10 | Diagnosing a failed connection. This is a lane you can enter at any time, not a step in the setup |
 
-After Phase 10: **VS Code → Remote-SSH: Connect to Host → `amarel-dev`**. That lands
+The one-shot `scripts/setup.sh` installs Phase 13 earlier, as its own Phase 9.6,
+because it has already asked its questions by then. Same result, different order.
+
+After Phase 10 you connect to the login host, and Phases 11 and 12 run there.
+**If you then say yes to Phase 13, switch your editor to `amarel-dev` and close
+the old window** — the guard Phase 13 installs will refuse the login host from
+then on, so a reconnect to it fails with `REFUSED`.
+
+With Phase 13 in place: **VS Code → Remote-SSH: Connect to Host → `amarel-dev`**. That lands
 you on a **compute node**, which is what Rutgers OARC requires; if no session is
 running, one is booked for you and the connection waits for it. That wait is a
 SLURM queue wait, so it is usually a few seconds but is not guaranteed to be:
@@ -209,9 +234,20 @@ editor does. The
 nodes and are not editor targets. Then, once connected, Phase 11 fixes Source
 Control and the optional Phase 12 sets up GitHub.
 
-Manage the session afterwards with `dev-session status`, `dev-session ensure` or
-`dev-session stop` on Amarel, or just ask the skill ("stop my amarel job", "how much
-time is left").
+Manage the session afterwards with `dev-session status`, `dev-session ensure`,
+`dev-session node` or `dev-session stop` on Amarel, or just ask the skill
+("stop my amarel job", "how much time is left", "give me a fresh 8 hour session").
+
+`stop` carries two guards and they are not obstacles to route around. It
+**refuses** while another editor window is still attached, and names the node,
+because a second window is someone else's work. And it **asks** if the job's
+cgroup shows active CPU, because that means something is running. `--force`
+overrides both, and is for when you already know what is attached.
+
+To change the length of your sessions, edit `AMAREL_DEV_WALLTIME` in
+`~/.amarel-dev.conf` on Amarel and then `stop` and `ensure`. `ensure` alone
+re-books the old length, because that is what the conf still says. A shorter
+block often starts sooner, since it fits gaps a 3 day job cannot.
 
 ---
 
@@ -225,7 +261,9 @@ time is left").
 | Tarball download fails | GitHub release not yet published, or your network blocks GitHub. Rebuild locally: `./scripts/build-sysroot.sh` (requires Docker). |
 | Env vars not loading in non-interactive shells | Check `~/.bashrc` on Amarel for an early `return` that skips the source line — move the sysroot block to the top. |
 | Extension install fails (`signature verification failed`) | On legacy CentOS 7, Phase 9 handles this and is idempotent — re-run from Phase 9. On RHEL 9.6 it's rare; merge `"extensions.verifySignature": false` into `~/.vscode-server/data/Machine/settings.json` by hand. |
-| Host fingerprint doesn't match OARC's published value | **Stop immediately. Possible MITM attack. Contact OARC.** |
+| Host fingerprint doesn't match | Setup compares what it scanned against a fingerprint **pinned in this repo** (recorded 2026-05-26 for the legacy host, 2026-06-05 for `amarel-new`), and stops on a mismatch rather than asking you to eyeball it. **Stop immediately. Possible MITM attack. Contact OARC.** Do not re-pin just because a key stopped matching. |
+| Phase 1's skip-probe says PROCEED even though key auth already works | Fixed in PR #29. Some OpenSSH builds print `identitiesonly true` / `addkeystoagent true` in `ssh -G` output where others print `yes`; the probe used to match only `yes` and so concluded nothing was configured. Both spellings are accepted now. If you are on an older copy of the runbook, this cost you an unnecessary re-run of Phases 1 to 5 and nothing worse. |
+| A reset left `.bak` files behind | Fixed in PR #29. The reset now removes every backup it creates, on both ends: `~/.ssh/config.bak`, `~/.ssh/known_hosts.bak`, `~/.zshrc.bak` locally, and `~/.bashrc.bak`, `~/.bash_profile.bak`, `~/.ssh/authorized_keys.bak` plus any `~/bin/*.bak-*` on Amarel. |
 | Source Control shows "no Git repository" / "Initialize Repository" on a real clone | VS Code Server is using CentOS 7's git 1.8.3.1, too old for its repo probe. Phase 11 sets `git.path` to a modern git in the remote Machine settings (on Amarel, `module use /projects/community/modulefiles` then `module load git` — the git modules aren't on the default `MODULEPATH`), then self-tests that VS Code will detect repos; `setup.sh` / `setup.ps1` apply and self-test it automatically. **On RHEL 9.6 (amarel-new) the system git (~2.43) already passes the probe, so Phase 11 writes nothing.** Deep dive: [docs/source-control-git-fix.md](docs/source-control-git-fix.md). |
 | VS Code connects but you're on `amarel3` / `amarel4` | You picked a login-node entry. Reconnect and pick **`amarel-dev`**. |
 | `amarel-dev: maintenance until <time>, cannot schedule.` | The cluster is in a maintenance reservation. This is the one legitimate refusal. Wait for the window to end. |
@@ -233,7 +271,7 @@ time is left").
 | The `amarel-dev` connect hangs, then VS Code gives up | Read the cluster-side log at `~/.amarel-dev-logs/connect.log`, then run `ssh amarel-jump bin/amarel-dev-connect --selftest`. |
 | `Connection closed by UNKNOWN port 65535` and nothing else | Expected. OpenSSH discards a detached master's stderr when `ControlPersist` is set, so the reason never reaches the popup. It is written to `~/.amarel-dev-logs/last-failure` and printed by `dev-session status`. `ssh -v amarel-dev` shows the live line. Easiest route: tell the skill "amarel-dev failed, find out why" and it diagnoses, fixes and files a report. |
 | `REFUSED: this is an Amarel login node.` | Working as designed. The guard stops an editor server on a login node. Connect to `amarel-dev` instead. Do not delete the guard. If you genuinely need the login node back, `touch ~/.allow-login-node-server` on Amarel turns the guard off without removing it, and deleting that file turns it back on. Keep the work light while it is off, because this is the thing OARC objected to. |
-| Your session vanished mid-work on a general partition | Every Amarel partition is `PreemptMode=REQUEUE`. On a low `PriorityTier` a higher-tier job can requeue yours with no warning. Setup prefers a lab partition, then the highest-tier general one, and `dev-session status` keeps warning you while you are on a preemptible one. A group-owned partition is the real fix. |
+| Your session vanished mid-work on a general partition | Every Amarel partition is `PreemptMode=REQUEUE`. On a low `PriorityTier` a higher-tier job can requeue yours with no warning. Setup detects which partitions you can actually submit to, prefers a lab partition and then the highest-tier general one, and `dev-session status` keeps warning you while you are on a preemptible one. A group-owned partition is the real fix. A guided run **states the partition it detected and asks you to confirm or override it** before locking it in (Phase 13.2); the one-shot script asks about a lab partition and takes the best general one without asking. |
 | The first connect to a compute node is slow | Expected, once, and this is one of two separate costs. `~/.vscode-server` lives on shared home, so the first connection to a node you have not used bootstraps the server there. Later connects to that node are under a second. |
 | A connect is slow and it is *not* a first connect to that node | This is the other cost: the SLURM leg, booking a node and waiting for it to start. Read `~/.amarel-dev-logs/connect.log`. Every line carries an absolute timestamp, an elapsed `+N.NNNs` since the connect began, and a `[pid]` tag, so the stage that took the time names itself: `warm lookup`, `settle`, `provision`, `post-provision lookup`, `handing off to nc`. Windows that start together interleave in this one file, so follow a single connect by its pid. A warm reconnect is one lookup and a handoff; anything else means a job had to be booked or repaired. **Check the log actually has a new `connect requested` line for the connect you are chasing.** If it does not, this script never ran: `ControlPersist 1800` means a reconnect within 30 minutes reuses the existing SSH master and skips the `ProxyCommand` entirely, so there is no cluster-side leg to blame and the newest entry belongs to an earlier connect. Time that one on the client instead, with `ssh -v amarel-dev` or the editor's Remote-SSH log. |
 | Your session ended and nothing warned you | `dev-session status` warns once under two hours remain. There is no auto-renew by design; a rolling allocation is what OARC objected to. A job ends at its walltime or via `dev-session stop`. Reconnecting books a new one. There is no duration limit, but the cores are held for the whole walltime whether or not you are typing, so ask for the shortest block that covers your work. Starting a new session is one click. |
@@ -270,6 +308,14 @@ files, and run the setup again later if that changes.
 Saying no leaves nothing behind to undo. Saying yes changes which host you pick
 in the Remote-SSH menu, from the login host to `amarel-dev`, and installs a guard
 that refuses an editor server on a login node from then on.
+
+**Phase 13 needs a repo checkout.** The files it installs into your `$HOME` on
+Amarel live in `cluster/` (`amarel-dev-lib`, `dev-session`, `amarel-dev-connect`,
+`bash_profile_block.sh`), and they are copied from your local clone. If you
+installed via a plugin marketplace, your agent already has the repo on disk and
+this is invisible. If you are driving a bare LLM with no clone, clone the repo
+before Phase 13; there is nothing to copy otherwise. Phases 0 to 12 do not need
+it, except Phase 6 on the legacy host.
 
 Phase 13 (the compute-node session) adds no credentials of its own. Everything it
 installs lives under your own `$HOME` on Amarel: nothing shared, nothing privileged,
@@ -338,19 +384,51 @@ The repo is its own Claude Code plugin marketplace. Two manifests under
   The `skills/amarel-vscode-setup/` skill is auto-discovered; no `skills` key
   is needed.
 
-To cut a plugin release, bump `version` in **both** `.claude-plugin/plugin.json`
-and the `plugins[0]` entry of `.claude-plugin/marketplace.json` (keep them
-identical — `claude plugin tag` validates that they agree, and `plugin.json`
-wins silently if they differ), then commit and push. Users pick up the new
-version via `/plugin marketplace update amarel-vscode`. Validate locally with
+To cut a plugin release, bump `version` in **all five** manifests, not just the
+Claude pair:
+
+- `.claude-plugin/plugin.json`
+- the `plugins[0]` entry of `.claude-plugin/marketplace.json`
+- `.codex-plugin/plugin.json`
+- the `plugins[0]` entry of `.agents/plugins/marketplace.json`
+- `gemini-extension.json`
+
+`name` must be `amarel-vscode` in all five, matching `PLUGIN_NAME` in
+`install.sh` and `$PluginName` in `install.ps1`. Within each ecosystem the
+plugin manifest wins silently if it disagrees with its marketplace entry, and
+`claude plugin tag` validates the Claude pair. The `docs-parity` CI job fails a
+PR whose five versions disagree, so a missed one is caught rather than shipped.
+
+Then commit and push. Users pick up the new version via
+`/plugin marketplace update amarel-vscode`. Validate locally with
 `claude plugin validate --strict .` before pushing.
 
 ### Keeping the runbooks in sync
 
-`skills/amarel-vscode-setup/SKILL.md` (Claude Code) and `AGENTS.md` (Codex / Cursor / Cline) must stay
-logically byte-identical in all non-framework-specific sections. `GEMINI.md`
-is a thin pointer — update only if phase numbers change. If you edit one
-runbook, edit all three.
+`skills/amarel-vscode-setup/SKILL.md` (Claude Code) and `AGENTS.md` (Codex /
+Cursor / Cline) must stay **byte-identical** below their respective headers.
+They are, and CI now proves it:
+
+```bash
+FM=$(awk 'NR>1 && /^---$/{print NR; exit}' skills/amarel-vscode-setup/SKILL.md)
+diff <(tail -n +51 AGENTS.md) \
+     <(tail -n +$((FM + 25)) skills/amarel-vscode-setup/SKILL.md)
+```
+
+The reliable way to edit them is to change `AGENTS.md` and then rebuild the
+mirror, rather than hand-applying the same edit twice:
+
+```bash
+SK=skills/amarel-vscode-setup/SKILL.md
+{ head -82 "$SK"; tail -n +51 AGENTS.md; } > /tmp/skill.new && mv /tmp/skill.new "$SK"
+```
+
+`GEMINI.md` is **not** a thin pointer, despite reading like one. It carries the
+numbered agent rules, the routing lanes, the dev-mode instruction and the
+dual-host regex policy, so it needs updating whenever any of those change and
+not only when a phase number does. Treating it as a pointer is how it drifted.
+`docs/index.md` and `docs/source-control-git-fix.md` also carry phase numbers
+and belong in the same sweep.
 
 ### Adding a new platform
 
