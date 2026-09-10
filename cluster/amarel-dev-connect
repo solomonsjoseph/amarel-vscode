@@ -53,20 +53,20 @@
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
-LIB="${AMAREL_DEV_LIB:-$HOME/bin/amarel-dev-lib}"
-if [ ! -r "$LIB" ]; then
-	echo "amarel-dev: $LIB is missing, re-run the Amarel setup. Details: bin/dev-session status" >&2
-	exit 1
-fi
-# shellcheck source=./amarel-dev-lib
-. "$LIB"
-adl_load_conf
-
-LOGFILE="$ADL_LOG_DIR/connect.log"
-LASTFAIL="$ADL_LOG_DIR/last-failure"
-
-# Anchor for note()'s elapsed field. Captured before any work so every line is
-# measured from the same instant.
+# Anchor for note()'s elapsed field. Taken FIRST, before the library and the
+# conf are read.
+#
+# It used to sit below those reads, and that made the instrumentation blind to
+# the one thing it is least able to control. Both files come off the cluster's
+# shared home, which is the filesystem that actually stalls here, and an anchor
+# taken after them starts the clock at the wrong instant: the first logged line
+# read +0.000s however long the reads took, so a slow connect caused by a slow
+# home directory had no stage to blame.
+#
+# Nothing can be LOGGED this early, because note() needs $ADL_LOG_DIR and only
+# the conf knows where that is. So the timestamp is taken here and the first
+# write waits until there is somewhere to write it. The first line's elapsed
+# field is then the cost of getting this far.
 #
 # `date +%s%3N` is GNU-only. That is safe on the cluster, where --selftest
 # already refuses to pass without GNU `date -d` because every maintenance
@@ -79,6 +79,18 @@ LASTFAIL="$ADL_LOG_DIR/last-failure"
 # "no millisecond clock", and note() then prints +? instead of a wrong number.
 T0="$(date +%s%3N 2>/dev/null)"
 case "$T0" in '' | *[!0-9]*) T0=0 ;; esac
+
+LIB="${AMAREL_DEV_LIB:-$HOME/bin/amarel-dev-lib}"
+if [ ! -r "$LIB" ]; then
+	echo "amarel-dev: $LIB is missing, re-run the Amarel setup. Details: bin/dev-session status" >&2
+	exit 1
+fi
+# shellcheck source=./amarel-dev-lib
+. "$LIB"
+adl_load_conf
+
+LOGFILE="$ADL_LOG_DIR/connect.log"
+LASTFAIL="$ADL_LOG_DIR/last-failure"
 
 # Progress goes to the log. On failure we emit ONE line on stderr and also
 # record it to $LASTFAIL.
@@ -114,6 +126,17 @@ case "$T0" in '' | *[!0-9]*) T0=0 ;; esac
 #      answers "which stage was slow". Before it, a warm connect wrote exactly
 #      one line and no duration existed anywhere in the log, so the question
 #      #33 asks was unanswerable from the evidence the script produced.
+#   3. A [pid] tag on EVERY line, not just the first one.
+#
+#      connect.log is one shared, appended file, and connects are not
+#      serialised. Open three editor windows before a control master exists and
+#      three copies of this script run at once, each with its own T0. Their
+#      lines interleave, and an elapsed field is only meaningful against the
+#      anchor it was measured from. Without a tag, a reader pairs a `warm
+#      lookup` from one connect with a `handing off` from another and reads a
+#      stage duration that no connect ever took. The tag is what makes the log
+#      separable back into connects. `grep "\[12345\]" connect.log` is one
+#      connect's whole timeline.
 # ---------------------------------------------------------------------------
 note() {
 	mkdir -p "$ADL_LOG_DIR" 2>/dev/null
@@ -128,7 +151,7 @@ note() {
 		ms=$((ms - T0))
 		el="$(printf '+%d.%03ds' "$((ms / 1000))" "$((ms % 1000))")"
 	fi
-	printf '%s %s %s\n' "$now" "$el" "$*" >>"$LOGFILE" 2>/dev/null
+	printf '%s %s [%s] %s\n' "$now" "$el" "$$" "$*" >>"$LOGFILE" 2>/dev/null
 }
 fail() {
 	note "FAILED: $*"
@@ -281,7 +304,12 @@ repair_pending() {
 # laptop wall clock, of which 0.127s was this script; two reconnects 20s later
 # took 0.53-0.58s each and logged nothing. An absent entry means reuse, not a
 # lost connect.
-note "connect requested (pid $$)"
+# The first line the log can carry: note() needs $ADL_LOG_DIR, which only
+# exists once the conf has loaded. T0 was taken before that, so this line's
+# elapsed field IS the cost of reading the library and the conf off shared
+# home. A large value here is a slow filesystem, not slow logic below.
+# The pid is no longer spelled out, because every line carries it now.
+note "connect requested"
 
 node=$(adl_node)
 note "warm lookup: node=${node:-none}"
