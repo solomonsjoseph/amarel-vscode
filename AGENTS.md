@@ -1120,7 +1120,8 @@ Read the glibc version from the first line (e.g. `ldd (GNU libc) 2.34`):
   apply. Go straight to **Phase 10** (Connect), then **Phase 11** (Source
   Control) and optional **Phase 12**.
 - **glibc < 2.28 → `PLATFORM=LEGACY` (CentOS 7).** Phases 6 to 9 live in
-  [`docs/runbook-legacy-centos7.md`](docs/runbook-legacy-centos7.md), moved whole. Work
+  [`docs/runbook-legacy-centos7.md`](docs/runbook-legacy-centos7.md), moved whole
+  (raw, if you cannot follow a relative link: https://raw.githubusercontent.com/solomonsjoseph/amarel-vscode/main/docs/runbook-legacy-centos7.md). Work
   through them there, then come back to **Phase 10** here.
 - **Probe inconclusive** (no glibc line, or an SSH hiccup): default to
   **LEGACY**, say so, and use the same file — installing the sysroot on an RHEL 9 host is harmless
@@ -1236,6 +1237,10 @@ setup, not a lesser one.
 
 **Common failures (linked recovery branches; none run on a clean first install):**
 
+Every "the legacy runbook" below is `docs/runbook-legacy-centos7.md`, raw at
+https://raw.githubusercontent.com/solomonsjoseph/amarel-vscode/main/docs/runbook-legacy-centos7.md
+if a relative path does not resolve from where you are reading this.
+
 - `expected GLIBC >= v2.28.0` → **legacy host only.** Phase 8 didn't take. Re-run 8.2 in [the legacy runbook](docs/runbook-legacy-centos7.md); fix `~/.bashrc` if the env var is empty (8.3). On RHEL 9.6 this error should not appear at all; if it does, Phase 5.5b's residue strip is what to check.
 - `signature verification failed with UnknownError` on "Install in SSH" → run **Phase 9** in [the legacy runbook](docs/runbook-legacy-centos7.md). If it reports `TOOL=NONE`, have the user add `module load python` to `~/.bashrc` (above any non-interactive `return`) so python3 reaches non-interactive shells, then re-trigger it. Rare on RHEL 9.6.
 - The connect fails with `Connection closed by UNKNOWN port 65535` → that is a
@@ -1272,7 +1277,8 @@ open doesn't have a Git repository / Initialize Repository"* even on a real
 clone). The fix: set the machine-scoped **`git.path`** in the remote Machine
 settings to a modern git on Amarel. **Run the `[EXEC]` steps yourself over `ssh
 -o BatchMode=yes`** — this reuses the exact `settings.json` file and merge ladder
-from Phase 9 (see [the legacy runbook](docs/runbook-legacy-centos7.md)).
+from Phase 9 (see [the legacy runbook](docs/runbook-legacy-centos7.md), raw at
+https://raw.githubusercontent.com/solomonsjoseph/amarel-vscode/main/docs/runbook-legacy-centos7.md).
 
 > **When this matters:** only once you open a git repo on Amarel in VS Code. If
 > Source Control already shows your branch and changes, `git.path` is already
