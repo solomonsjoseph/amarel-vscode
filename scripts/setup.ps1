@@ -880,6 +880,46 @@ fi
 #     see the real reason where macOS and Linux users do not.
 #   - UserKnownHostsFile NUL, not /dev/null.
 #   - No UseKeychain, which is macOS only.
+# Copy the three ~/bin scripts over an already-working install, without
+# re-running the rest of Phase 9.6 and without re-asking the opt-in question.
+# Mirrors refresh_cluster_scripts in setup.sh; read the rationale there.
+#
+# Short version: the skip probe proves the cluster side WORKS, never that it is
+# CURRENT, so returning without copying made every cluster-side fix invisible to
+# the users who re-ran the script to get it.
+#
+# Stage into ~/bin/.amarel-stage and rename, because scp truncates in place and
+# bash reads a running script incrementally; this path is reached exactly when a
+# connect may be live.
+#
+# UNTESTED ON WINDOWS, like the rest of Phase 13 here. See issue #30.
+# Returns $true on success, $false on any failure, and never throws: a failure
+# leaves the previous working install alone.
+function Update-ClusterScripts {
+  param([string]$ClusterDir)
+
+  foreach ($f in @('amarel-dev-lib', 'dev-session', 'amarel-dev-connect')) {
+    if (-not (Test-Path (Join-Path $ClusterDir $f))) { return $false }
+  }
+
+  & ssh -o BatchMode=yes "$AmarelUser@$AmarelHost" 'mkdir -p ~/bin/.amarel-stage' *> $null
+  if ($LASTEXITCODE -ne 0) { return $false }
+
+  & scp -q (Join-Path $ClusterDir 'amarel-dev-lib') (Join-Path $ClusterDir 'dev-session') `
+           (Join-Path $ClusterDir 'amarel-dev-connect') `
+           "${AmarelUser}@${AmarelHost}:bin/.amarel-stage/" *> $null
+  if ($LASTEXITCODE -ne 0) {
+    & ssh -o BatchMode=yes "$AmarelUser@$AmarelHost" 'rm -rf ~/bin/.amarel-stage' *> $null
+    return $false
+  }
+
+  # One quoted remote command, so PowerShell interpolates nothing and the
+  # cluster's bash sees it verbatim.
+  $stage = 'set -e; cd "$HOME/bin/.amarel-stage"; chmod 755 dev-session amarel-dev-connect; chmod 644 amarel-dev-lib; mv -f amarel-dev-lib dev-session amarel-dev-connect "$HOME/bin/"; cd "$HOME"; rmdir "$HOME/bin/.amarel-stage"'
+  & ssh -o BatchMode=yes "$AmarelUser@$AmarelHost" $stage *> $null
+  return ($LASTEXITCODE -eq 0)
+}
+
 function Invoke-PhaseComputeSession {
   Write-Heading "Phase 9.6 — Compute-node dev session (amarel-dev)"
 
@@ -892,13 +932,29 @@ function Invoke-PhaseComputeSession {
   }
 
   # ── Skip probe ───────────────────────────────────────────────────────────
+  # Both blocks present plus a clean --selftest means the user already opted in
+  # and the cluster side works. Do not re-ask the question. But refresh the
+  # scripts from this checkout first, then self-test the copy that is installed
+  # NOW rather than the one the probe saw. Mirrors setup.sh.
   $haveJump = Select-String -Path $SshConfigPath -Pattern '^Host amarel-jump$' -Quiet -ErrorAction SilentlyContinue
   $haveDev  = Select-String -Path $SshConfigPath -Pattern '^Host amarel-dev$'  -Quiet -ErrorAction SilentlyContinue
   if ($haveJump -and $haveDev) {
     & ssh -o BatchMode=yes "$AmarelUser@$AmarelHost" 'bin/amarel-dev-connect --selftest' *> $null
     if ($LASTEXITCODE -eq 0) {
-      Write-Info "amarel-dev already set up and self-testing clean"
-      $script:ComputeSessionReady = $true
+      if (Update-ClusterScripts -ClusterDir $clusterDir) {
+        Write-Info "Refreshed ~/bin/{amarel-dev-lib,dev-session,amarel-dev-connect} from this checkout"
+      } else {
+        Write-Warn "Could not refresh the cluster scripts; the existing copy is untouched."
+      }
+
+      & ssh -o BatchMode=yes "$AmarelUser@$AmarelHost" 'bin/amarel-dev-connect --selftest' *> $null
+      if ($LASTEXITCODE -eq 0) {
+        Write-Info "amarel-dev already set up and self-testing clean"
+        $script:ComputeSessionReady = $true
+      } else {
+        Write-Warn "The cluster scripts were refreshed but --selftest now fails."
+        Write-Host "  Run: ssh amarel-jump bin/amarel-dev-connect --selftest"
+      }
       return
     }
   }

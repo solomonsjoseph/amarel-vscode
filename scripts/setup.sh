@@ -941,18 +941,87 @@ REMOTE
 # Idempotent. Non-fatal: a failure here leaves the login-node setup intact.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Copy the three ~/bin scripts over an already-working install, without
+# re-running the rest of Phase 9.6 and without re-asking the opt-in question.
+#
+# WHY THIS EXISTS. The skip probe below passes when the ssh_config blocks are
+# present and the INSTALLED connector self-tests. Neither fact says the
+# installed copy matches this checkout. So every time cluster/ changes, the
+# probe returned before the scp further down, and a user who pulled the fix and
+# re-ran the script kept the old remote copy while being told the setup was
+# clean. The fix shipped to new users only, which is the opposite of who needed
+# it. Re-running after a fix is this project's supported recovery path, so it
+# has to actually re-deliver.
+#
+# STAGE, THEN RENAME. Never scp straight over a live file: bash reads a script
+# incrementally as it runs, and this path is reached exactly when the user has
+# a working setup, so a connect can be in flight. scp truncates and rewrites in
+# place, which corrupts a running copy. `mv` inside ~/bin is an atomic rename on
+# one filesystem, so a running process keeps the inode it started with.
+#
+# BEST EFFORT. A failure here leaves the previous, working install untouched.
+# Returns non-zero so the caller can say so, but never aborts the phase.
+refresh_cluster_scripts() {
+  local cluster_dir="${SKILL_DIR}/cluster" f
+  for f in amarel-dev-lib dev-session amarel-dev-connect; do
+    [[ -f "$cluster_dir/$f" ]] || return 1
+  done
+
+  ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" 'mkdir -p ~/bin/.amarel-stage' \
+    >/dev/null 2>&1 || return 1
+
+  scp -q "$cluster_dir/amarel-dev-lib" "$cluster_dir/dev-session" \
+         "$cluster_dir/amarel-dev-connect" \
+         "${AMAREL_USER}@${AMAREL_HOST}:bin/.amarel-stage/" 2>/dev/null || {
+    ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" \
+        'rm -rf ~/bin/.amarel-stage' >/dev/null 2>&1 || true
+    return 1; }
+
+  ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" 'bash -se' >/dev/null 2>&1 <<'STAGE' || return 1
+set -e
+cd "$HOME/bin/.amarel-stage"
+chmod 755 dev-session amarel-dev-connect
+chmod 644 amarel-dev-lib
+mv -f amarel-dev-lib dev-session amarel-dev-connect "$HOME/bin/"
+cd "$HOME"
+rmdir "$HOME/bin/.amarel-stage"
+STAGE
+}
+
 phase_compute_session() {
   heading "Phase 9.6 — Compute-node dev session (amarel-dev)"
 
   local rc=0
 
   # ── Skip probe ─────────────────────────────────────────────────────────────
+  # Both ssh_config blocks present plus a clean --selftest means the user has
+  # already opted in and the cluster side works. Do NOT re-ask the question.
+  #
+  # But "works" is not "current". Refresh the three ~/bin scripts from this
+  # checkout before returning, then self-test the copy that is actually
+  # installed now. See refresh_cluster_scripts above for why the old
+  # return-without-copying made every cluster-side fix invisible to exactly the
+  # users who re-ran the script to get it.
   if grep -q "^Host amarel-jump$" "$SSH_CONFIG_PATH" 2>/dev/null &&
      grep -q "^Host amarel-dev$"  "$SSH_CONFIG_PATH" 2>/dev/null &&
      ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" \
          'bin/amarel-dev-connect --selftest' >/dev/null 2>&1; then
-    info "amarel-dev already set up and self-testing clean"
-    COMPUTE_SESSION_READY=1
+
+    if refresh_cluster_scripts; then
+      info "Refreshed ~/bin/{amarel-dev-lib,dev-session,amarel-dev-connect} from this checkout"
+    else
+      warn "Could not refresh the cluster scripts; the existing copy is untouched."
+    fi
+
+    # Self-test the copy that is installed NOW, not the one the probe saw.
+    if ssh -o BatchMode=yes "${AMAREL_USER}@${AMAREL_HOST}" \
+           'bin/amarel-dev-connect --selftest' >/dev/null 2>&1; then
+      info "amarel-dev already set up and self-testing clean"
+      COMPUTE_SESSION_READY=1
+    else
+      warn "The cluster scripts were refreshed but --selftest now fails."
+      COMPUTE_SESSION_SKIP="the refreshed cluster scripts failed --selftest; run 'ssh amarel-jump bin/amarel-dev-connect --selftest' to see why"
+    fi
     return 0
   fi
 

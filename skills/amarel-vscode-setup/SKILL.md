@@ -2590,7 +2590,37 @@ is already done. Run this yourself:
 grep -q '^Host amarel-jump$' ~/.ssh/config && grep -q '^Host amarel-dev$' ~/.ssh/config && ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bin/amarel-dev-connect --selftest' >/dev/null 2>&1 && echo "SKIP" || echo "PROCEED"
 ```
 
-`SKIP` → go to Phase 10 and tell the user to pick `amarel-dev`.
+`SKIP` means the cluster side **works**. It does not mean it is **current**, and
+those are different facts. The probe runs the connector that is already
+installed, so it passes just as happily on a copy from six months ago. That made
+every cluster-side fix invisible to exactly the people who came back for it: pull
+the fix, resume the runbook, get told to skip, keep the old copy. Re-running
+after a fix is this project's supported recovery path, so refresh before you
+skip.
+
+On `SKIP`, run this first:
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'mkdir -p ~/bin/.amarel-stage' && scp -q <REPO_ROOT>/cluster/amarel-dev-lib <REPO_ROOT>/cluster/dev-session <REPO_ROOT>/cluster/amarel-dev-connect <NetID>@amarel-new.hpc.rutgers.edu:bin/.amarel-stage/ && ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'set -e; cd "$HOME/bin/.amarel-stage"; chmod 755 dev-session amarel-dev-connect; chmod 644 amarel-dev-lib; mv -f amarel-dev-lib dev-session amarel-dev-connect "$HOME/bin/"; cd "$HOME"; rmdir "$HOME/bin/.amarel-stage"; bin/amarel-dev-connect --selftest'
+```
+
+**Stage into `~/bin/.amarel-stage`, then rename. Never `scp` straight over
+`~/bin`.** `bash` reads a script incrementally while it runs, and this step is
+reached precisely when the user has a working setup, so a connect can be in
+flight. `scp` truncates and rewrites in place, which corrupts a running copy.
+`mv` inside `~/bin` is an atomic rename on one filesystem, so a running process
+keeps the inode it started with and finishes undisturbed.
+
+The `--selftest` on the end runs against the copy installed **now**, not the one
+the probe saw. Expect it to end in `selftest: OK`.
+
+If the refresh fails, the previous working copy is untouched, so say what failed
+and carry on to Phase 10. If the refresh succeeds but `--selftest` then fails,
+**stop and report it**: do not send the user to Phase 10 with a connector that
+fails its own self-test.
+
+Then go to Phase 10 and tell the user to pick `amarel-dev`.
 
 ### 13.1 — Hard gate: the remote shell must be silent on stdout
 
