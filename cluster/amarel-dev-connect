@@ -65,6 +65,21 @@ adl_load_conf
 LOGFILE="$ADL_LOG_DIR/connect.log"
 LASTFAIL="$ADL_LOG_DIR/last-failure"
 
+# Anchor for note()'s elapsed field. Captured before any work so every line is
+# measured from the same instant.
+#
+# `date +%s%3N` is GNU-only. That is safe on the cluster, where --selftest
+# already refuses to pass without GNU `date -d` because every maintenance
+# calculation needs it.
+#
+# VALIDATE THE VALUE, DO NOT TRUST THE EXIT STATUS. BSD date does not fail on
+# an unknown %3N: it emits the literal characters "3N" and exits 0. So a `||`
+# fallback never fires, and `$(( 17890156433N - ... ))` is an arithmetic syntax
+# error rather than a missing field. Measured on macOS 2026-09-10. T0=0 means
+# "no millisecond clock", and note() then prints +? instead of a wrong number.
+T0="$(date +%s%3N 2>/dev/null)"
+case "$T0" in '' | *[!0-9]*) T0=0 ;; esac
+
 # Progress goes to the log. On failure we emit ONE line on stderr and also
 # record it to $LASTFAIL.
 #
@@ -86,9 +101,34 @@ LASTFAIL="$ADL_LOG_DIR/last-failure"
 # $LASTFAIL is therefore the channel that actually works. `dev-session status`
 # prints it, and the skill's Phase 13.10 reads it to diagnose a failed connect.
 # Keep the stderr line anyway: it is what a CLI user and `ssh -v` see.
+#
+# ---------------------------------------------------------------------------
+# Two changes from the original single-stamp version, both from issue #33:
+#
+#   1. The stamp carries a timezone offset and milliseconds. The old
+#      '%Y-%m-%dT%H:%M:%S' was local time with no offset at one-second
+#      resolution, so it could not order two lines across a DST change and
+#      could not measure anything shorter than a second. A warm connect is
+#      0.4s, so one-second resolution measured it as zero.
+#   2. An elapsed field, +N.NNNs since T0. This is the half that actually
+#      answers "which stage was slow". Before it, a warm connect wrote exactly
+#      one line and no duration existed anywhere in the log, so the question
+#      #33 asks was unanswerable from the evidence the script produced.
+# ---------------------------------------------------------------------------
 note() {
 	mkdir -p "$ADL_LOG_DIR" 2>/dev/null
-	printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >>"$LOGFILE" 2>/dev/null
+	local now el ms
+	now="$(date '+%Y-%m-%dT%H:%M:%S.%3N%z' 2>/dev/null)"
+	# Same BSD trap as T0 above: check the output, not the exit status.
+	case "$now" in '' | *3N*) now="$(date '+%Y-%m-%dT%H:%M:%S%z')" ;; esac
+	el="+?"
+	if [ "$T0" != 0 ]; then
+		ms="$(date +%s%3N 2>/dev/null)"
+		case "$ms" in '' | *[!0-9]*) ms="$T0" ;; esac
+		ms=$((ms - T0))
+		el="$(printf '+%d.%03ds' "$((ms / 1000))" "$((ms % 1000))")"
+	fi
+	printf '%s %s %s\n' "$now" "$el" "$*" >>"$LOGFILE" 2>/dev/null
 }
 fail() {
 	note "FAILED: $*"
@@ -156,12 +196,21 @@ fi
 
 # Poll for the job to enter RUNNING. $1 = attempts, 3s apart.
 settle() {
-	local n
+	local n i=0
+	# Bracketed rather than logged per attempt. Attempts are a fixed 3s apart,
+	# so the entry and exit lines already give the duration and the count; 20
+	# per-attempt lines would add nothing and would bury the rest of the log.
+	note "settle: waiting for RUNNING, up to $1 attempts x 3s"
 	for _ in $(seq 1 "$1"); do
 		sleep 3
+		i=$((i + 1))
 		n=$(adl_node)
-		[ -n "$n" ] && return 0
+		if [ -n "$n" ]; then
+			note "settle: RUNNING on $n after $i attempt(s)"
+			return 0
+		fi
 	done
+	note "settle: still not RUNNING after $i attempt(s)"
 	return 1
 }
 
@@ -176,8 +225,12 @@ settle() {
 repair_pending() {
 	local tries pj why spec cur cs ns
 	tries="$1"
+	note "repair_pending: checking for a pending job (budget $tries attempts)"
 	pj=$(adl_job_pending) || return 1
-	[ -n "$pj" ] || return 1
+	if [ -z "$pj" ]; then
+		note "repair_pending: nothing pending"
+		return 1
+	fi
 
 	why=$(adl_pending_reason "$pj")
 	case "$why" in
@@ -217,7 +270,21 @@ repair_pending() {
 
 # --------------------------------------------------------------------------
 
+# The t=0 anchor. Everything above this is sourcing the library and reading the
+# conf; everything below is the connect itself, so this line is what later
+# elapsed values are read against.
+#
+# THE LOG IS SPARSER THAN THE NUMBER OF CONNECTS, BY DESIGN. Host amarel-dev
+# sets `ControlMaster auto` with `ControlPersist 1800`, so a reconnect inside
+# that window multiplexes over the live master and never runs this script at
+# all. Measured 2026-09-10: the first connect logged 4 lines and took 3.07s of
+# laptop wall clock, of which 0.127s was this script; two reconnects 20s later
+# took 0.53-0.58s each and logged nothing. An absent entry means reuse, not a
+# lost connect.
+note "connect requested (pid $$)"
+
 node=$(adl_node)
+note "warm lookup: node=${node:-none}"
 
 # Case 1: something is pending. Repair before provisioning anything new, or
 # `dev-session ensure` blocks for five minutes on a job that can never start
@@ -243,9 +310,17 @@ if [ -z "$node" ]; then
 	# The lock file is on GPFS, where advisory locking is not always reliable.
 	# It held for three concurrent holders on 2026-08-15, and because ensure is
 	# idempotent the worst case is a duplicate submission, not corruption.
+	# `dev-session`'s own progress lines land in $LOGFILE undated, because its
+	# say() is a bare printf and is also the interactive output of
+	# `dev-session status`. Timestamping it there would uglify the view a user
+	# reads to fix a log a machine reads, so it is bracketed here instead: the
+	# two elapsed values below bound everything it did.
+	note "provision: acquiring lock, then dev-session ensure"
 	timeout 150 flock -w 120 "$HOME/.amarel-dev.lock" \
 		timeout 120 "$HOME/bin/dev-session" ensure >>"$LOGFILE" 2>&1
+	note "provision: dev-session ensure returned rc=$?"
 	node=$(adl_node)
+	note "post-provision lookup: node=${node:-none}"
 
 	# The job just submitted may itself collide with a reservation.
 	if [ -z "$node" ]; then
@@ -268,6 +343,13 @@ note "connecting to $node"
 # `dev-session status` would report a stale failure forever and the skill would
 # diagnose a problem that is already gone.
 rm -f "$LASTFAIL" 2>/dev/null
+
+# THE LAST LINE THIS SCRIPT CAN EVER WRITE. `exec` replaces the process, so
+# nothing after it runs and the nc/SSH handshake itself is not measured. The log
+# therefore covers everything up to the handoff and no further. That is inherent
+# to being a ProxyCommand, not an omission: a "connected" event would have to
+# come from the editor, which is the one place that already knows.
+note "handing off to nc -> $node:22"
 
 # `-i 120s`, never a bare `nc`.
 #
