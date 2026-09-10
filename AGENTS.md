@@ -56,11 +56,15 @@ already exists, they never ask the user whether they want to keep or wipe
 it. Do not jump from Phase 0's preflight straight into a skip-probe (Phase
 1.0 Gate 1/2 or Phase 0.2's targeted-repair check) without asking Phase 0.1
 first.
-- **Full setup** (first-time VS Code-on-Amarel): run Phases 0 → 13 in order,
-  with one exception: **Phase 13 is optional and comes after Phase 12**, and
-  Phase 10's target depends on whether it ran. Phase 13
-  decides which host the user picks in the Remote-SSH menu. So the real
-  order is 0 → 9, then 13, then 10 → 12.
+- **Full setup** (first-time VS Code-on-Amarel): run Phases 0 → 13 in order.
+  **Phase 13 is optional and is offered after Phase 12**, so the order is
+  0 → 12, then 13. Phase 10 connects to the login host; if the user then says
+  yes to Phase 13, they switch their editor to `amarel-dev` and close the old
+  window, which 13.8 tells them to do.
+  *(The one-shot `scripts/setup.sh` installs the same thing earlier, as its
+  Phase 9.6, because it has already asked its questions by then and prints its
+  Phase 10 hand-off last. That is a script-internal ordering and does not
+  change this runbook's.)*
 - **Targeted repair** (the user is *already connected* — status bar shows
   `SSH: amarel-new.hpc.rutgers.edu` — and only reports a **Source Control** problem
   ["no Git repository", the repo won't sync, "Initialize Repository" keeps
@@ -77,13 +81,32 @@ step, wait for the user to confirm it is done, then run a verifying probe
 yourself. **Phase 1.0 probes Phases 1–5 in one shot: if key auth already
 works AND the `ssh_config` block is correct, skip Phases 1–5 entirely.**
 
-**Platform-neutrality note (applies to every phase):** *Local* commands
-(executed on the user's Mac/Linux/Windows box) need per-OS variants — the
-runbook provides both bash and PowerShell forms. *Remote* commands (sent into
-Amarel via `ssh ... 'bash -se' <<'REMOTE' ... REMOTE`) are platform-neutral:
-the here-string travels via stdin and bash executes on Amarel regardless of
-local OS. So Phases 7.4–7.8 and 8.1 remote heredocs need no Windows variant;
-only the local `ssh`/`scp` invocation line differs.
+**Platform-neutrality note (applies to every phase).** *Local* commands
+(executed on the user's Mac/Linux/Windows box) need per-OS variants, and the
+runbook provides both bash and PowerShell forms.
+
+**A remote heredoc is NOT platform-neutral, and an earlier version of this note
+said it was.** The *payload* is: the script body travels on stdin and bash
+executes it on Amarel whatever the local OS. But `<<'REMOTE'` **is itself the
+local invocation line**, and PowerShell has no heredoc operator at all, so
+`ssh ... 'bash -se' <<'REMOTE'` is a **parse error** there, not a portable
+command. Same for `... < somefile`: `<` is reserved in PowerShell.
+
+So a step that delivers a remote payload still needs a Windows form. The
+delivery pattern that works is a PowerShell here-string piped in, as
+`scripts/setup.ps1:1046-1059` does:
+
+```powershell
+$body = @"
+...script body...
+"@
+$body | & ssh -o BatchMode=yes <NetID>@amarel-new.hpc.rutgers.edu 'bash -se'
+```
+
+and `Get-Content <file> | ssh ... 'cat >> <target>'` replaces a `< somefile`
+redirect. **Phase 13's steps do not yet carry these forms.** That gap is
+tracked in issue #30 and is deliberately not being written blind: see the
+untested-items note in the Dev mode section for why.
 
 ### Per-phase protocol
 
@@ -2953,6 +2976,55 @@ attached or running and says go ahead anyway.
 `stop`, and nothing else. A rolling allocation is the behaviour OARC objected
 to, relocated, so do not add one.
 
+#### Changing the session length
+
+*give me a fresh 8 hour session* lands here, and the three commands above cannot
+do it. `dev-session` takes **no length argument**: it reads `AMAREL_DEV_WALLTIME`
+from `~/.amarel-dev.conf`, which holds whatever was chosen back at Phase 13.3. So
+`ensure` on its own re-books the *old* length, and a user who asked for 8 hours
+silently gets 3 days.
+
+Change the conf first, then cycle the job. Substitute the SLURM timespec for what
+they asked (`4h` → `0-04:00:00`, `8h` → `0-08:00:00`, `1d` → `1-00:00:00`, and so
+on, the same mapping as 13.3):
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes amarel-jump 'bash -se' <<'REMOTE'
+set -uo pipefail
+sed -i 's/^AMAREL_DEV_WALLTIME=.*/AMAREL_DEV_WALLTIME=<WALLTIME>/' ~/.amarel-dev.conf
+grep '^AMAREL_DEV_WALLTIME=' ~/.amarel-dev.conf
+REMOTE
+```
+
+The `grep` is the check, and it must echo the new value back. Empty output means
+the key was not in the file, so add it rather than assuming the `sed` worked.
+
+**Write a real timespec, not the shorthand.** `AMAREL_DEV_WALLTIME=8h` is
+rejected by `adl_valid_timespec` in `cluster/amarel-dev-lib`, and the library
+warns `ignoring bad AMAREL_DEV_WALLTIME` and falls back to the 3 day default.
+Verified 2026-09-10. So the failure mode is loud rather than silent, but the user
+still gets the wrong length, and the warning appears on stderr where a connect
+discards it.
+
+Then stop and re-book, and **respect `stop`'s two guards**: if it refuses because
+another window is attached, or asks because the cgroup shows active CPU, relay
+that to the user rather than reaching for `--force`.
+
+[EXEC]
+```bash
+ssh -o BatchMode=yes amarel-jump bin/dev-session stop
+ssh -o BatchMode=yes amarel-jump bin/dev-session ensure
+```
+
+Two things to tell them. **This is a new job**, so anything running in the old one
+ends with it. And a shorter block usually *starts sooner*, because it fits gaps a
+3 day job cannot, which is worth saying since it makes the shorter ask sound like
+a win rather than a sacrifice.
+
+The change persists: every later `ensure` uses the new length until it is edited
+again.
+
 ### 13.10 — "It failed." Diagnose, fix, then file the report
 
 This is the lane for a user who says any of:
@@ -3124,7 +3196,7 @@ you may run via Bash directly.
 any other tool, for any reason.** This rule stands on its own: it does not
 depend on whether the command happens to prompt for a secret. `[TTY]` also
 marks steps that are destructive or irreversible on the user's key material
-or remote account state (the `reset.sh full` launcher is the clearest
+or remote account state (the `full` reset launcher is the clearest
 example: no password prompt, still `[TTY]`, because it deletes a key pair and
 wipes remote state). Staging a script for a `[TTY]` step (writing it to
 `~/.cache/amarel-vscode/`) is an `[EXEC]` action and is fine; running that
@@ -3357,7 +3429,8 @@ Say this plainly if the owner ever relies on it as protection:
 
 **The job is to close the untested list, honestly.**
 
-1. **Enumerate.** Read `cluster/VERIFICATION-*.md` and the tracking issue, and
+1. **Enumerate.** Read `cluster/VERIFICATION-*.md` and the open issues
+   (`gh issue list`), and
    write a note listing every item that is untested, partially tested, or
    verified only by simulation. Say for each one *why* it is open: no hardware,
    no maintenance window, too destructive to run against a live account.
@@ -3385,11 +3458,14 @@ Say this plainly if the owner ever relies on it as protection:
 
 Written down so the next run starts from facts rather than a re-reading of the
 whole verification log. Treat it as a starting point, not the whole truth: check
-`cluster/VERIFICATION-*.md` and the tracking issue, because items get added.
+`cluster/VERIFICATION-*.md` and `gh issue list`, because items get added. (The
+Phase 13 tracking issue this once named, #24, was closed on 2026-08-21; there is
+no single successor, so read the open list.)
 
 | Item | Why it is open | Closeable on the owner's Mac? |
 |---|---|---|
-| `scripts/setup.ps1` has never been executed | no Windows machine | **No.** `pwsh` on macOS parses the script, but the Windows `ssh_config` path, `NUL` as the known-hosts sink and OpenSSH-for-Windows behaviour are exactly the parts that will not run. Running it there proves syntax and nothing more, and must be recorded as syntax only. Real Windows or a VM is the only honest close. |
+| `scripts/setup.ps1` Phase 9.6, the compute session, has never been executed | no Windows machine | **No.** Corrected 2026-09-10: the owner reports the rest of `setup.ps1` **does work on Windows** against `amarel-new`, so this row is no longer "the script has never run". What has never run there is the compute-session half. `pwsh` on macOS parses the script, but the Windows `ssh_config` path, `NUL` as the known-hosts sink and OpenSSH-for-Windows behaviour are exactly the parts that will not run. Real Windows or a VM is the only honest close. |
+| Phase 13 has no PowerShell forms for 13.2, 13.4, 13.5 | no Windows machine, and writing them blind is worse than the gap | **No.** These three steps use `<<'REMOTE'` or `< somefile`, both parse errors in PowerShell, so a Windows user following the guided runbook is stopped there. The delivery pattern that works is known (`setup.ps1:1046-1059`), but **do not write these blind**: check `git config core.autocrlf` and whether `scripts/setup.ps1` has CR bytes on the Windows box first, because a CRLF here-string sends bash `set -uo pipefail\r` and a heredoc terminator that never matches. Tracked in issue #30. |
 | Maintenance-window refusal and the walltime trim | next window is 2026-09-15 | **Partly.** A harness that feeds fake `scontrol` output closes the logic. The live window closes the rest. Do not mark the item closed on the harness alone. |
 | The editor half of verification item 12 | needs a human opening a remote window | **Yes.** The owner drives it. |
 | A live `full` reset | destroys the key pair and the running session | **Yes,** against a throwaway `$HOME` or a scratch account, never the working one. |
@@ -3432,13 +3508,19 @@ standalone any time a prior partial run left duplicate or stale state. It wipes
 personal `Host rutgers.edu`) or any other key, and never reads private-key
 contents. Two modes (the script takes one argument):
 
-- **`config`** (default — `bash reset.sh`): cleans config-level state only —
+**There is no `scripts/reset.sh` in the repo.** The reset is a script you stage
+at runtime to `~/.cache/amarel-vscode/reset.sh` (macOS/Linux) or
+`$env:LOCALAPPDATA\amarel-vscode\reset.ps1` (Windows), and the user launches it
+from there. Both modes below are named by that staged path, so a user who types
+`./reset.sh` and gets "No such file" is reading an older instruction.
+
+- **`config`** (the default, `bash ~/.cache/amarel-vscode/reset.sh`): cleans config-level state only,
   the `~/.zshrc` block, the skill's `ssh_config` blocks (`Host
   amarel-new.hpc.rutgers.edu`, `Host amarel-jump` and `Host amarel-dev`, each
   with the comment run the skill wrote above it), the `known_hosts` entries, and
   dedupes Amarel's `authorized_keys`. Leaves your key pair, the deployed sysroot
   and any running dev session in place.
-- **`full`** (`bash reset.sh full`): a complete wipe of everything the skill
+- **`full`** (`bash ~/.cache/amarel-vscode/reset.sh full`): a complete wipe of everything the skill
   created. On top of `config`, it deletes the local `id_ed25519_amarel` key pair
   and, in one SSH call (while key auth still works), removes the skill's key from
   Amarel's `authorized_keys`, deletes the deployed `~/.vscode-server/sysroot` +
