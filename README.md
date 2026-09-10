@@ -102,6 +102,14 @@ https://github.com/solomonsjoseph/amarel-vscode
 Read its AGENTS.md:
 https://raw.githubusercontent.com/solomonsjoseph/amarel-vscode/main/AGENTS.md
 
+Two sections live in separate files. Fetch a file ONLY if you reach the
+point that needs it, and skip it otherwise:
+- Phases 6 to 9, the legacy CentOS 7 sysroot. Needed only if Phase 5.5
+  says LEGACY. On RHEL 9.6 you skip all four and never open this.
+  https://raw.githubusercontent.com/solomonsjoseph/amarel-vscode/main/docs/runbook-legacy-centos7.md
+- Dev mode, which is for the repo owner and not for setting me up.
+  You do not need it.
+
 It runs Phases 0 to 13. Phase 13 is optional and is offered after Phase 12,
 so the order is 0 to 12, then 13.
 
@@ -205,10 +213,7 @@ Phase 0 of the skill detects your OS and confirms all of these automatically.
 | 5 | Verify passwordless SSH works end-to-end |
 | 5.5 | Detect the remote platform (glibc): RHEL 9.6 → skip the sysroot Phases 6–9; CentOS 7 → run them |
 | 5.5b | *(RHEL 9.6 only)* Strip any legacy sysroot residue left from a prior CentOS 7 setup on the same `$HOME` |
-| 6 | *(legacy CentOS 7 only)* Download the glibc 2.28 sysroot tarball from GitHub Releases, verify SHA-256 |
-| 7 | *(legacy CentOS 7 only)* Copy the tarball to Amarel, extract it, and hard-verify it through three independent gates |
-| 8 | *(legacy CentOS 7 only)* Wire up `~/.bashrc` and verify the glibc env vars load in a non-interactive SSH session |
-| 9 | *(legacy CentOS 7 only)* Write `"extensions.verifySignature": false` to VS Code Server's settings — needed only when the node binary is patched against the custom glibc |
+| 6 to 9 | *(legacy CentOS 7 only, and in a separate file)* Download and SHA-256-verify the glibc 2.28 sysroot, deploy it to Amarel through three verification gates, wire `~/.bashrc`, and disable extension signature verification. On RHEL 9.6 all four are skipped, so they live in **[docs/runbook-legacy-centos7.md](docs/runbook-legacy-centos7.md)** rather than in the runbook every agent loads |
 | 10 | Print the VS Code GUI steps and connect |
 | 11 | Point VS Code at a modern git on Amarel (`git.path`) so Source Control detects your repos — needed on legacy CentOS 7 (stock git 1.8.3.1); on RHEL 9.6 the system git ~2.43 already passes, so nothing is written |
 | 12 | *(Optional)* Authenticate GitHub on Amarel (`gh auth login`) and set your git identity, so commits and pushes work |
@@ -427,8 +432,11 @@ SK=skills/amarel-vscode-setup/SKILL.md
 numbered agent rules, the routing lanes, the dev-mode instruction and the
 dual-host regex policy, so it needs updating whenever any of those change and
 not only when a phase number does. Treating it as a pointer is how it drifted.
-`docs/index.md` and `docs/source-control-git-fix.md` also carry phase numbers
-and belong in the same sweep.
+`docs/index.md`, `docs/source-control-git-fix.md`,
+`docs/runbook-legacy-centos7.md` and `docs/runbook-dev-mode.md` also carry phase
+numbers and belong in the same sweep. The last two hold Phases 6 to 9 and the
+non-security half of Dev mode, moved out of the runbook so a smaller model can
+hold what is left (issue #35); edit those phases there, not in `AGENTS.md`.
 
 ### Adding a new platform
 

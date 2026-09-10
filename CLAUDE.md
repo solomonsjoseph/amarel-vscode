@@ -20,10 +20,12 @@ If you edit one runbook file, keep the others in sync. The mirrors are:
 - `README.md` — end-user docs containing the bare-LLM copy-paste prompt
 - `docs/index.md` — the GitHub Pages landing page
 - `docs/source-control-git-fix.md` — the Phase 11/12 deep dive
+- `docs/runbook-legacy-centos7.md` — **Phases 6 to 9, moved out of the runbook.** Part of the same lockstep set: edit them here, not in `AGENTS.md`, and remember `README.md`'s phase table summarises them in one row.
+- `docs/runbook-dev-mode.md` — the non-security half of Dev mode
 
-The last two are easy to forget and both carry phase numbers, so they drift
-quietly. There is now a `docs-parity` CI job that catches the mechanical half of
-that (see below); it cannot catch prose going stale.
+The four `docs/` files are the ones that get forgotten, and all four carry phase
+numbers, so they drift quietly. There is now a `docs-parity` CI job that catches
+the mechanical half of that (see below); it cannot catch prose going stale.
 
 
 ## Commands
@@ -63,7 +65,16 @@ The runtime artifact is a tarball (`vscode-sysroot-x86_64-linux-gnu.tgz`) publis
 - `scripts/devmode-verify.sh` + `scripts/devmode_verify.py` + `scripts/devmode.digest.json` — the gate on the `AGENTS.md` "Dev mode" section. A salted PBKDF2-SHA256 verifier (600k iterations) that checks one phrase **read from stdin, never argv**, and prints only `MATCH` / `NO-MATCH`. It fails closed if any piece is missing. The python lives in its own file on purpose: as a heredoc it would *become* the process's stdin, so python would read the script instead of the phrase and every check would fail. Load-bearing, and previously documented only in `GEMINI.md`.
 - `.watch/GOAL.md` + `.watch/NOTES.md` — the six verbatim goals Phase 13 is audited against, and a read-only 2026-08-21 audit against them. Working artifacts, not user-facing, and not read by any code. Useful as recorded design intent: its HIGH finding (four `return 0` paths printing "Server-side setup complete" while leaving the login-node guard uninstalled) is fixed, `COMPUTE_SESSION_SKIP` / `COMPUTE_SESSION_DECLINED` now gate that summary.
 - `.github/workflows/build-and-release.yml` — builds the sysroot tarball on a native x86_64 runner (crosstool-NG cannot build under QEMU on Apple Silicon) and publishes it to a Release on a `v*` tag. `.github/workflows/docs-parity.yml` — the doc lockstep/fence/version/pin checks.
-- `docs/` — `index.md` is the GitHub Pages landing page; `source-control-git-fix.md` is the Phase 11/12 deep dive. Both carry phase numbers and both belong in the mirror set above.
+- `docs/` — `index.md` is the GitHub Pages landing page; `source-control-git-fix.md` is the Phase 11/12 deep dive; `runbook-legacy-centos7.md` holds Phases 6 to 9 and `runbook-dev-mode.md` the non-security half of Dev mode. All four carry phase numbers and all four belong in the mirror set above.
+
+**Why the runbook is split (issue #35).** `AGENTS.md` was 3,777 lines and every agent loaded all of it. Phases 6 to 9 are the legacy CentOS 7 sysroot: 778 lines, a fifth of the file, and Phase 5.5 routes past all of them on RHEL 9.6, which is the default host. Dev mode is another 125 lines no user-facing run ever reads. Moving both took it to 2,974, a 21% cut, **as whole-section moves rather than a prose rewrite**, so nothing was summarised and no constraint was reworded.
+
+Four rules that fall out of that:
+
+- **Split by execution path, not by "this reads like reference".** The boundary already existed in Phase 5.5. Picking rationale out of scattered prose is how meaning drifts, and it is why the split was done this way rather than by extracting the measured-incident comments.
+- **Every link is written twice**, relative and as an absolute `raw.githubusercontent.com` URL. Three separate readers need the second form: an agent that normalises `~/.claude/skills/amarel-vscode-setup/../../docs` lexically lands on `~/.claude/docs`, which does not exist; Codex's marketplace materialisation is unverified and may copy only `skills/`; and README's bare-LLM prompt hands over a single raw URL from which no relative path resolves at all.
+- **The Dev mode security text stayed inline.** The gate ("how it opens, and only how") and the limits that never lift are in `AGENTS.md`; only the rest moved. A security rule behind a link is a security rule an agent skips by not following the link.
+- **Do not move Phase 13's `ssh_config` block** (`AGENTS.md`, the `[EXEC]` under 13.7). Roughly 49 of its lines are `#` comments that get **written into the user's `~/.ssh/config`**. They are shipped output addressed to a future reader of that file, not documentation addressed to the agent, so moving them changes what lands on the user's disk.
 - `install.{sh,ps1}` — installs local agent skill links for Claude Code and Codex (`~/.claude/skills/amarel-vscode-setup` and `~/.codex/skills/amarel-vscode-setup`) so `git pull` updates the installed skill.
 - `.claude-plugin/marketplace.json` + `.claude-plugin/plugin.json` — the Claude Code plugin manifests that make the repo installable via `/plugin marketplace add solomonsjoseph/amarel-vscode` then `/plugin install amarel-vscode@amarel-vscode`. The plugin `source` is `"./"` (repo root); the `skills/amarel-vscode-setup/` skill is auto-discovered, so no `skills` key is declared. **`plugin.json` was MOVED here from the repo root — Claude Code reads only `.claude-plugin/plugin.json`, so future manifest edits go here, never to a root `plugin.json`.** Keep `name` (`amarel-vscode`) and `version` identical across both manifests and `PLUGIN_NAME` in `install.{sh,ps1}`. The symlink install path (`install.sh`) remains the supported route for Codex/Gemini/Agents and a Claude Code fallback.
 - `.codex-plugin/plugin.json` + `.agents/plugins/marketplace.json` — the **Codex** plugin + marketplace manifests (`codex plugin marketplace add solomonsjoseph/amarel-vscode`; plugin `source.path` is `"./"`, and `"skills": "./skills/"` makes the same `skills/amarel-vscode-setup/` skill discoverable). `gemini-extension.json` (repo root) — the **Gemini** extension manifest (`gemini extensions install <repo-url>`; GEMINI.md is auto-loaded as context and `skills/` is auto-discovered; Gemini loads from `~/.gemini/extensions`). Codex and Gemini do **not** read `.claude-plugin/*` — each ecosystem needs its own manifest. Validate with `claude plugin validate --strict .`, `gemini extensions validate .`, and a local `codex plugin marketplace add <dir>`.
@@ -105,14 +116,14 @@ Per-platform, because "fully functional" was hiding real gaps:
 | macOS | Validated, including Phase 13 against a live compute node. |
 | Linux | Not validated. Shares the bash path with macOS, so expected to work; the only known divergences are `UseKeychain` (macOS only) and the Sequoia fix in 4.4. |
 | Windows, Phases 0–12 | **Works** against `amarel-new`, per the owner. |
-| Windows, Phase 13 / `amarel-dev` | **Never run.** This is the one real gap; see issue #30 and the untested-items table in `AGENTS.md`. |
+| Windows, Phase 13 / `amarel-dev` | **Never run.** This is the one real gap; see issue #30 and the untested-items table in `docs/runbook-dev-mode.md`. |
 | Legacy CentOS 7 | Maintained but not re-validated since the RHEL 9.6 migration. |
 
 ## Known issues / future work
 
 **Do not record an issue list here.** The previous version of this section said "No known open issues as of 2026-06-10", and by 2026-08-22 there were four. A snapshot of a moving list is worse than no list, because an agent reads it and concludes there is nothing to fix.
 
-Read `gh issue list` instead. For work that is *known* to be open but is not an issue, see the untested-items table in the `AGENTS.md` Dev mode section.
+Read `gh issue list` instead. For work that is *known* to be open but is not an issue, see the untested-items table in `docs/runbook-dev-mode.md`.
 
 One correction worth stating here, because getting it wrong reintroduces a fixed bug: **issue #16 removed `ControlMaster`, and Phase 13 deliberately puts it back** for the `amarel-dev` block, with a coupled `ServerAliveInterval 15` / `ServerAliveCountMax 3` keepalive and `ControlPersist 1800`. The rationale and the 2026-08-21 re-test are in the `ssh_config` comment block the runbook writes. Do not "clean up" `ControlMaster` on the strength of #16's title.
 
